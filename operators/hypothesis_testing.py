@@ -1,559 +1,372 @@
-from engine.engine import HEEngine
-import heaan as hn
+import json
+import math
+from pathlib import Path
+from statistics import NormalDist
+
 import numpy as np
-from hedata.data import HEData
-from operators.inv_sqrt import HEStatistics
-from operators.operator import HEOperator
-import math, json
+import heaan as hn
+
+from engine.HEengine import HEengine
+from engine.HEdata import Ciphertext
+from operators.invSqrt import HEStats
 
 
 class HEHypothesisTesting:
-    def __init__(self, engine: HEEngine):
-        self._engine = engine 
-        self.__ho = HEOperator(engine)
-        self.__hs = HEStatistics(engine)
 
-    def HE_Welch_T_Test(self, x1: HEData, x2: HEData, R, return_debug=False):
-        """
-        HE-friendly Welch's t-test.
+    _COEFFICIENT_DIR = Path(__file__).resolve().parents[1] / "coefficients"
+    _T_CRITICAL_COEFFICIENTS = _COEFFICIENT_DIR / "t_dist_coeffs_by_degree.json"
 
-        x1, x2:
-            각 그룹의 연속형 데이터 ciphertext.
-            예: smoker=yes charges/1000, smoker=no charges/1000
+    def __init__(self, engine: HEengine):
 
-        R:
-            데이터 range upper bound.
-            예: charges/1000 이 [0, 63.8] 근처이면 R=63.8 사용 가능.
+        self.engine = engine
+        self.stats = HEStats(engine)
+        self._bootstrap_count = 0
 
-        return_debug:
-            True이면 T뿐 아니라 mean, var, V 등 중간값도 함께 반환.
-        """
+    def bootstrap_count(self):
 
-        ho = self.__ho
-        hs = self.__hs
+        return self._bootstrap_count + self.stats.bootstrap_count()
 
-        n1 = x1.size()
-        n2 = x2.size()
+    def reset_bootstrap_count(self):
 
-        print("n1, n2:", n1, n2)
+        self._bootstrap_count = 0
+        self.stats.reset_bootstrap_count()
 
-        if n1 <= 1 or n2 <= 1:
-            raise ValueError("Welch t-test requires n1 > 1 and n2 > 1.")
+    def _bootstrap(self, ctxt: Ciphertext):
 
-        # ============================================================
-        # 1. Sufficient statistics
-        #    S = Σx
-        #    Q = Σx²
-        # ============================================================
+        self.engine.bootstrap(ctxt)
+        self._bootstrap_count += 1
 
-        S1 = ho.sum(x1)
-        S2 = ho.sum(x2)
+    def _critical_value_from_inv_df(
+        self,
+        inv_df: Ciphertext,
+        alpha: float,
+        degree: int,
+    ):
 
-        x1_sq = ho.mult(x1, x1)
-        x2_sq = ho.mult(x2, x2)
+        if not np.isfinite(alpha) or not 0.0 < alpha < 1.0:
+            raise ValueError("alpha must be a finite value in (0, 1)")
 
-        Q1 = ho.sum(x1_sq)
-        Q2 = ho.sum(x2_sq)
+        path = self._T_CRITICAL_COEFFICIENTS
 
-        # ============================================================
-        # 2. Mean
-        #    mean = S / n
-        # ============================================================
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing t critical-value coefficients: {path}")
 
-        mean_x1 = ho.mult_const(S1, 1.0 / n1)
-        mean_x2 = ho.mult_const(S2, 1.0 / n2)
+        with path.open("r", encoding="utf-8") as file:
+            table = json.load(file)
 
-        # ============================================================
-        # 3. Sample variance
-        #
-        #    s² = (Q - S²/n) / (n-1)
-        #
-        #    이 방식은 padding slot에 mean을 빼지 않으므로 안전함.
-        # ============================================================
+        degree_key = f"degree_{degree}"
+        alpha_key = f"alpha_{alpha:g}"
 
-        S1_sq = ho.mult(S1, S1)
-        S2_sq = ho.mult(S2, S2)
+        if degree_key not in table:
+            supported = ", ".join(key.removeprefix("degree_") for key in table)
+            raise ValueError(
+                f"Unsupported critical-value degree={degree}. Supported: {supported}"
+            )
 
-        S1_sq_over_n = ho.mult_const(S1_sq, 1.0 / n1)
-        S2_sq_over_n = ho.mult_const(S2_sq, 1.0 / n2)
+        if alpha_key not in table[degree_key]:
+            supported = ", ".join(
+                key.removeprefix("alpha_") for key in table[degree_key]
+            )
+            raise ValueError(f"Unsupported alpha={alpha}. Supported: {supported}")
 
-        var1_num = ho.sub(Q1, S1_sq_over_n)
-        var2_num = ho.sub(Q2, S2_sq_over_n)
+        try:
+            coefficients = np.asarray(
+                [float(pair[0]) for pair in table[degree_key][alpha_key]],
+                dtype=np.float64,
+            )
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("Invalid t critical-value coefficient format") from exc
 
-        var1 = ho.mult_const(var1_num, 1.0 / (n1 - 1))
-        var2 = ho.mult_const(var2_num, 1.0 / (n2 - 1))
+        if len(coefficients) < 2 or not np.all(np.isfinite(coefficients)):
+            raise ValueError("Critical-value coefficients must be finite")
 
-        # ============================================================
-        # 4. Welch denominator inside sqrt
-        #
-        #    V = s1²/n1 + s2²/n2
-        # ============================================================
+        # z = 2 / df - 1 maps InvDF in [0, 1] to [-1, 1].
+        z = self.engine.sub(self.engine.add(inv_df, inv_df), 1.0)
 
-        V1 = ho.mult_const(var1, 1.0 / n1)
-        V2 = ho.mult_const(var2, 1.0 / n2)
+        required_levels = math.ceil(math.log2(len(coefficients) - 1)) + 3
 
-        V = ho.add(V1, V2)
+        if z.level() < required_levels:
+            self._bootstrap(z)
 
-        # ============================================================
-        # 5. Public upper bound for V
-        #
-        #    If x ∈ [0, R], then sample variance ≤ R²/4 approximately.
-        #
-        #    V_max = R²/4 * (1/(n1-1) + 1/(n2-1))
-        #
-        #    More conservative than empirical bound.
-        # ============================================================
-
-        V_max = ((R ** 2) / 4.0) * (
-            1.0 / (n1 - 1) + 1.0 / (n2 - 1)
+        cheb_coeffs = hn.math.approx.ChebyshevCoefficients(
+            coefficients,
+            len(coefficients),
         )
 
-        print("V_max:", V_max)
+        return self.engine.evaluate_chebyshev(z, cheb_coeffs)
 
-        if V_max <= 0:
-            raise ValueError("V_max must be positive.")
-
-        # ============================================================
-        # 6. Normalize V into (0, 1]
-        #
-        #    V_norm = V / V_max
-        #
-        #    InvSqrt(V) = InvSqrt(V_norm) / sqrt(V_max)
-        # ============================================================
-
-        V_norm = ho.mult_const(V, 1.0 / V_max)
-
-        # 필요하면 InvSqrt 전에 bootstrapping
-        V_norm = ho.do_bootstrapping(V_norm, 11)
-
-        inv_sqrt_V_norm = hs.he_inv_sqrt(V_norm)
-
-        # ============================================================
-        # 7. Welch t-statistic
-        #
-        #    t = (mean1 - mean2) / sqrt(V)
-        #      = (mean1 - mean2) * InvSqrt(V_norm) / sqrt(V_max)
-        # ============================================================
-
-        numerator = ho.sub(mean_x1, mean_x2)
-        numerator = ho.mult_const(numerator, 1.0 / np.sqrt(V_max))
-
-        T = ho.mult(numerator, inv_sqrt_V_norm)
-
-        if return_debug:
-            return {
-                "T": T,
-                "mean_x1": mean_x1,
-                "mean_x2": mean_x2,
-                "var1": var1,
-                "var2": var2,
-                "V": V,
-                "V_norm": V_norm,
-                "V_max": V_max,
-                "S1": S1,
-                "S2": S2,
-                "Q1": Q1,
-                "Q2": Q2,
-            }
-
-        return T
-
-    def HE_Welch_T_Test_With_DF(self, x1: HEData, x2: HEData, R, return_debug=False):
-        """
-        HE-friendly Welch's t-test with Welch-Satterthwaite degrees of freedom.
-
-        Returns:
-            T, DF
-        """
-
-        ho = self.__ho
-        hs = self.__hs
-
-        n1 = x1.size()
-        n2 = x2.size()
-
-        print("n1, n2:", n1, n2)
+    def HE_Welch_T_Test(
+        self,
+        x1: Ciphertext,
+        x2: Ciphertext,
+        n1: int,
+        n2: int,
+        R: float,
+        alpha=0.05,
+        critical_degree=15,
+        score_bound=1.0,
+    ):
 
         if n1 <= 1 or n2 <= 1:
-            raise ValueError("Welch t-test requires n1 > 1 and n2 > 1.")
+            raise ValueError("Welch t-test requires both groups to have n > 1")
 
-        # ============================================================
-        # 1. Sufficient statistics
-        #    S = Σx
-        #    Q = Σx²
-        # ============================================================
+        if not np.isfinite(R) or R <= 0.0:
+            raise ValueError("R must be a finite positive public bound")
 
-        S1 = ho.sum(x1)
-        S2 = ho.sum(x2)
+        if not np.isfinite(score_bound) or score_bound <= 0.0:
+            raise ValueError("score_bound must be a finite positive public bound")
 
-        x1_sq = ho.mult(x1, x1)
-        x2_sq = ho.mult(x2, x2)
+        s1 = self.engine.sum(x1)
+        s2 = self.engine.sum(x2)
 
-        Q1 = ho.sum(x1_sq)
-        Q2 = ho.sum(x2_sq)
+        q1 = self.engine.sum(self.engine.mult(x1, x1))
+        q2 = self.engine.sum(self.engine.mult(x2, x2))
 
-        # ============================================================
-        # 2. Mean
-        # ============================================================
+        mean1 = self.engine.mult(s1, 1.0 / n1)
+        mean2 = self.engine.mult(s2, 1.0 / n2)
 
-        mean_x1 = ho.mult_const(S1, 1.0 / n1)
-        mean_x2 = ho.mult_const(S2, 1.0 / n2)
+        s1_squared = self.engine.mult(s1, s1)
+        s2_squared = self.engine.mult(s2, s2)
 
-        # ============================================================
-        # 3. Sample variance
-        #
-        #    s² = (Q - S²/n) / (n-1)
-        # ============================================================
+        variance1 = self.engine.sub(q1, self.engine.mult(s1_squared, 1.0 / n1))
+        variance2 = self.engine.sub(q2, self.engine.mult(s2_squared, 1.0 / n2))
 
-        S1_sq = ho.mult(S1, S1)
-        S2_sq = ho.mult(S2, S2)
+        variance1 = self.engine.mult(variance1, 1.0 / (n1 - 1))
+        variance2 = self.engine.mult(variance2, 1.0 / (n2 - 1))
 
-        S1_sq_over_n = ho.mult_const(S1_sq, 1.0 / n1)
-        S2_sq_over_n = ho.mult_const(S2_sq, 1.0 / n2)
+        a1 = self.engine.mult(variance1, 1.0 / n1)
+        a2 = self.engine.mult(variance2, 1.0 / n2)
+        v = self.engine.add(a1, a2)
 
-        var1_num = ho.sub(Q1, S1_sq_over_n)
-        var2_num = ho.sub(Q2, S2_sq_over_n)
+        # For x in [0, R], sample variance is bounded by approximately R^2 / 4.
+        v_max = (R ** 2 / 4.0) * (1.0 / (n1 - 1) + 1.0 / (n2 - 1))
 
-        var1 = ho.mult_const(var1_num, 1.0 / (n1 - 1))
-        var2 = ho.mult_const(var2_num, 1.0 / (n2 - 1))
+        if v_max <= 0.0:
+            raise ValueError("Computed V_max must be positive")
 
-        # ============================================================
-        # 4. Welch denominator
-        #
-        #    A = s1²/n1
-        #    B = s2²/n2
-        #    V = A + B
-        # ============================================================
+        v_norm = self.engine.mult(v, 1.0 / v_max)
+        self._bootstrap(v_norm)
 
-        A = ho.mult_const(var1, 1.0 / n1)
-        B = ho.mult_const(var2, 1.0 / n2)
+        inv_sqrt_v = self.stats.invSqrt(v_norm)
 
-        V = ho.add(A, B)
+        t_numerator = self.engine.sub(mean1, mean2)
+        t_numerator = self.engine.mult(t_numerator, 1.0 / np.sqrt(v_max))
 
-        # ============================================================
-        # 5. Public upper bound for V
-        #
-        #    V_max = R²/4 * (1/(n1-1) + 1/(n2-1))
-        # ============================================================
+        a1_squared = self.engine.mult(a1, a1)
+        a2_squared = self.engine.mult(a2, a2)
 
-        V_max = ((R ** 2) / 4.0) * (
-            1.0 / (n1 - 1) + 1.0 / (n2 - 1)
+        d1 = self.engine.mult(a1_squared, 1.0 / (n1 - 1))
+        d2 = self.engine.mult(a2_squared, 1.0 / (n2 - 1))
+        d = self.engine.add(d1, d2)
+
+        a1_max = (R ** 2 / 4.0) / (n1 - 1)
+        a2_max = (R ** 2 / 4.0) / (n2 - 1)
+        d_max = a1_max ** 2 / (n1 - 1) + a2_max ** 2 / (n2 - 1)
+
+        if d_max <= 0.0:
+            raise ValueError("Computed D_max must be positive")
+
+        d_norm = self.engine.mult(d, 1.0 / d_max)
+        self._bootstrap(d_norm)
+
+        # InvDF = D / V^2.
+        inv_v_norm = self.engine.mult(inv_sqrt_v, inv_sqrt_v)
+        inv_v_norm_squared = self.engine.mult(inv_v_norm, inv_v_norm)
+        self._bootstrap(inv_v_norm_squared)
+
+        inv_df = self.engine.mult(d_norm, inv_v_norm_squared)
+        inv_df = self.engine.mult(inv_df, d_max / v_max ** 2)
+
+        critical_value = self._critical_value_from_inv_df(
+            inv_df,
+            alpha,
+            critical_degree,
         )
 
-        print("V_max:", V_max)
+        t_numerator_squared = self.engine.mult(t_numerator, t_numerator)
 
-        if V_max <= 0:
-            raise ValueError("V_max must be positive.")
+        inv_v_for_score = Ciphertext(inv_v_norm)
+        self._bootstrap(inv_v_for_score)
 
-        # ============================================================
-        # 6. Normalize V and compute T
-        #
-        #    V_norm = V / V_max
-        #    InvSqrt(V) = InvSqrt(V_norm) / sqrt(V_max)
-        # ============================================================
+        t_squared = self.engine.mult(t_numerator_squared, inv_v_for_score)
+        critical_squared = self.engine.mult(critical_value, critical_value)
 
-        V_norm = ho.mult_const(V, 1.0 / V_max)
+        score = self.engine.sub(t_squared, critical_squared)
+        normalized_score = self.engine.mult(score, 1.0 / score_bound)
 
-        V_norm = ho.do_bootstrapping(V_norm, 11)
+        self._bootstrap(normalized_score)
 
-        inv_sqrt_V_norm = hs.he_inv_sqrt(V_norm)
+        sign_score = self.stats.sign(normalized_score)
 
-        numerator = ho.sub(mean_x1, mean_x2)
-        numerator = ho.mult_const(numerator, 1.0 / np.sqrt(V_max))
+        step = self.engine.add(sign_score, 1.0)
+        step = self.engine.mult(step, 0.5)
 
-        T = ho.mult(numerator, inv_sqrt_V_norm)
+        return step
 
-        # ============================================================
-        # 7. Welch-Satterthwaite degrees of freedom
-        #
-        #    df = V² / D
-        #
-        #    D = A²/(n1-1) + B²/(n2-1)
-        # ============================================================
-
-        A_sq = ho.mult(A, A)
-        B_sq = ho.mult(B, B)
-
-        D1 = ho.mult_const(A_sq, 1.0 / (n1 - 1))
-        D2 = ho.mult_const(B_sq, 1.0 / (n2 - 1))
-
-        D = ho.add(D1, D2)
-
-        # ============================================================
-        # 8. Public upper bound for D
-        #
-        #    A_max = R²/4 * 1/(n1-1)
-        #    B_max = R²/4 * 1/(n2-1)
-        #
-        #    D_max = A_max²/(n1-1) + B_max²/(n2-1)
-        #          = (R^4 / 16) * (1/(n1-1)^3 + 1/(n2-1)^3)
-        # ============================================================
-
-        A_max = ((R ** 2) / 4.0) * (1.0 / (n1 - 1))
-        B_max = ((R ** 2) / 4.0) * (1.0 / (n2 - 1))
-
-        D_max = (A_max ** 2) / (n1 - 1) + (B_max ** 2) / (n2 - 1)
-
-        print("D_max:", D_max)
-
-        if D_max <= 0:
-            raise ValueError("D_max must be positive.")
-
-        # ============================================================
-        # 9. Normalize D and compute 1/D
-        #
-        #    D_norm = D / D_max
-        #    1/D = InvSqrt(D_norm)^2 / D_max
-        # ============================================================
-
-        D_norm = ho.mult_const(D, 1.0 / D_max)
-
-        D_norm = ho.do_bootstrapping(D_norm, 11)
-
-        inv_sqrt_D_norm = hs.he_inv_sqrt(D_norm)
-
-        inv_D_norm = ho.mult(inv_sqrt_D_norm, inv_sqrt_D_norm)
-
-        # ============================================================
-        # 10. Compute df
-        #
-        #    df = V² / D
-        #
-        #    V = V_max * V_norm
-        #    D = D_max * D_norm
-        #
-        #    df = V_norm² * Inv(D_norm) * V_max² / D_max
-        # ============================================================
-
-        V_norm_sq = ho.mult(V_norm, V_norm)
-
-        DF = ho.mult(V_norm_sq, inv_D_norm)
-        DF = ho.mult_const(DF, (V_max ** 2) / D_max)
-
-        if return_debug:
-            return {
-                "T": T,
-                "DF": DF,
-                "mean_x1": mean_x1,
-                "mean_x2": mean_x2,
-                "var1": var1,
-                "var2": var2,
-                "A": A,
-                "B": B,
-                "V": V,
-                "V_norm": V_norm,
-                "D": D,
-                "D_norm": D_norm,
-                "V_max": V_max,
-                "D_max": D_max,
-            }
-
-        return T, DF
-
-    def HE_F_Test(self, x1: HEData, x2: HEData, R, return_debug=False):
-        """
-        HE-friendly two-sample variance-ratio F-test.
-
-        Test:
-            H0: sigma1^2 = sigma2^2
-            H1: sigma1^2 != sigma2^2
-
-        Statistic:
-            F = s1^2 / s2^2
-
-        Degrees of freedom:
-            df1 = n1 - 1
-            df2 = n2 - 1
-
-        Notes:
-            - This computes fixed-orientation F = var1 / var2.
-            - Do not compute max(var1,var2)/min(var1,var2) under HE.
-            - Two-sided p-value can be computed after decryption.
-        """
-
-        ho = self.__ho
-        hs = self.__hs
-
-        n1 = x1.size()
-        n2 = x2.size()
-
-        print("n1, n2:", n1, n2)
+    def HE_F_Test(
+        self,
+        x1: Ciphertext,
+        x2: Ciphertext,
+        n1: int,
+        n2: int,
+        R: float,
+        lower_critical=None,
+        upper_critical=None,
+        score_bound=None,
+    ):
 
         if n1 <= 1 or n2 <= 1:
-            raise ValueError("F-test requires n1 > 1 and n2 > 1.")
+            raise ValueError("F-test requires n1 > 1 and n2 > 1")
 
-        # ============================================================
-        # 1. Sufficient statistics
-        #    S = Σx
-        #    Q = Σx²
-        # ============================================================
+        decision_args = (lower_critical, upper_critical, score_bound)
 
-        S1 = ho.sum(x1)
-        S2 = ho.sum(x2)
+        if any(value is not None for value in decision_args):
+            if any(value is None for value in decision_args):
+                raise ValueError(
+                    "F decision mode requires lower_critical, upper_critical, "
+                    "and score_bound together"
+                )
 
-        x1_sq = ho.mult(x1, x1)
-        x2_sq = ho.mult(x2, x2)
+            if (
+                not np.isfinite(lower_critical)
+                or not np.isfinite(upper_critical)
+                or not np.isfinite(score_bound)
+                or lower_critical <= 0.0
+                or upper_critical <= lower_critical
+                or score_bound <= 0.0
+            ):
+                raise ValueError("Invalid public F critical values or score_bound")
 
-        Q1 = ho.sum(x1_sq)
-        Q2 = ho.sum(x2_sq)
+        s1 = self.engine.sum(x1)
+        s2 = self.engine.sum(x2)
 
-        # ============================================================
-        # 2. Mean, optional but useful for debugging
-        # ============================================================
+        q1 = self.engine.sum(self.engine.mult(x1, x1))
+        q2 = self.engine.sum(self.engine.mult(x2, x2))
 
-        mean_x1 = ho.mult_const(S1, 1.0 / n1)
-        mean_x2 = ho.mult_const(S2, 1.0 / n2)
+        s1_squared = self.engine.mult(s1, s1)
+        s2_squared = self.engine.mult(s2, s2)
 
-        # ============================================================
-        # 3. Sample variance
-        #
-        #    s² = (Q - S²/n) / (n - 1)
-        # ============================================================
+        variance1 = self.engine.sub(q1, self.engine.mult(s1_squared, 1.0 / n1))
+        variance2 = self.engine.sub(q2, self.engine.mult(s2_squared, 1.0 / n2))
 
-        S1_sq = ho.mult(S1, S1)
-        S2_sq = ho.mult(S2, S2)
+        variance1 = self.engine.mult(variance1, 1.0 / (n1 - 1))
+        variance2 = self.engine.mult(variance2, 1.0 / (n2 - 1))
 
-        S1_sq_over_n = ho.mult_const(S1_sq, 1.0 / n1)
-        S2_sq_over_n = ho.mult_const(S2_sq, 1.0 / n2)
+        var_max = R ** 2 / 4.0
 
-        var1_num = ho.sub(Q1, S1_sq_over_n)
-        var2_num = ho.sub(Q2, S2_sq_over_n)
+        if var_max <= 0.0:
+            raise ValueError("var_max must be positive")
 
-        var1 = ho.mult_const(var1_num, 1.0 / (n1 - 1))
-        var2 = ho.mult_const(var2_num, 1.0 / (n2 - 1))
+        var2_norm = self.engine.mult(variance2, 1.0 / var_max)
+        self._bootstrap(var2_norm)
 
-        # ============================================================
-        # 4. Compute F = var1 / var2
-        #
-        #    Use InvSqrt(var2)^2 instead of direct division.
-        # ============================================================
+        inv_sqrt_var2_norm = self.stats.invSqrt(var2_norm)
 
-        # Public upper bound for sample variance.
-        # If x in [0, R], then s² <= approximately R²/4.
-        var_max = (R ** 2) / 4.0
+        inv_var2_norm = self.engine.mult(
+            inv_sqrt_var2_norm,
+            inv_sqrt_var2_norm,
+        )
+        inv_var2 = self.engine.mult(inv_var2_norm, 1.0 / var_max)
 
-        print("var_max:", var_max)
+        f_statistic = self.engine.mult(variance1, inv_var2)
 
-        if var_max <= 0:
-            raise ValueError("var_max must be positive.")
-
-        # Normalize var2 into (0, 1]
-        var2_norm = ho.mult_const(var2, 1.0 / var_max)
-
-        # Optional bootstrapping before inverse square-root
-        var2_norm = ho.do_bootstrapping(var2_norm, 11)
-
-        inv_sqrt_var2_norm = hs.he_inv_sqrt(var2_norm)
-
-        # 1/var2 = InvSqrt(var2_norm)^2 / var_max
-        inv_var2_norm = ho.mult(inv_sqrt_var2_norm, inv_sqrt_var2_norm)
-        inv_var2 = ho.mult_const(inv_var2_norm, 1.0 / var_max)
-
-        F = ho.mult(var1, inv_var2)
-
-        # df는 public scalar이므로 굳이 ciphertext로 만들 필요 없음
         df1 = n1 - 1
         df2 = n2 - 1
 
-        if return_debug:
-            return {
-                "F": F,
-                "df1": df1,
-                "df2": df2,
-                "mean_x1": mean_x1,
-                "mean_x2": mean_x2,
-                "var1": var1,
-                "var2": var2,
-                "var2_norm": var2_norm,
-                "var_max": var_max,
-                "S1": S1,
-                "S2": S2,
-                "Q1": Q1,
-                "Q2": Q2,
-            }
+        if lower_critical is None:
+            return f_statistic, df1, df2
 
-        return F, df1, df2
+        inv_sqrt_for_score = Ciphertext(inv_sqrt_var2_norm)
+        self._bootstrap(inv_sqrt_for_score)
 
-    def HE_Z_Test(self, x1: HEData, x2: HEData, sigma1_sq: float, sigma2_sq: float, delta0: float = 0.0, return_debug: bool = False):
-        """
-        HE-friendly two-sample Z-test with known/public variances.
+        inv_var2_for_score = self.engine.mult(
+            inv_sqrt_for_score,
+            inv_sqrt_for_score,
+        )
+        inv_var2_for_score = self.engine.mult(
+            inv_var2_for_score,
+            1.0 / var_max,
+        )
 
-        Hypotheses:
-            H0: mu1 - mu2 = delta0
-            H1: mu1 - mu2 != delta0
+        f_for_score = self.engine.mult(variance1, inv_var2_for_score)
 
-        Statistic:
-            Z = (mean1 - mean2 - delta0) / sqrt(sigma1_sq/n1 + sigma2_sq/n2)
+        lower_score = self.engine.sub(f_for_score, lower_critical)
+        upper_score = self.engine.sub(f_for_score, upper_critical)
+        score = self.engine.mult(lower_score, upper_score)
 
-        Notes:
-            - sigma1_sq and sigma2_sq are public/external variances.
-            - This version does not require HE InvSqrt.
-            - p-value is computed after decryption using standard normal distribution.
-        """
+        normalized_score = self.engine.mult(score, 1.0 / score_bound)
+        sign_score = self.stats.sign(normalized_score)
 
-        ho = self.__ho
+        step = self.engine.add(sign_score, 1.0)
+        step = self.engine.mult(step, 0.5)
 
-        n1 = x1.size()
-        n2 = x2.size()
+        return step
 
-        print("n1, n2:", n1, n2)
+    def HE_Z_Test(
+        self,
+        x1: Ciphertext,
+        x2: Ciphertext,
+        n1: int,
+        n2: int,
+        sigma1_sq: float,
+        sigma2_sq: float,
+        delta0=0.0,
+        alpha=None,
+        score_bound=None,
+    ):
 
         if n1 <= 0 or n2 <= 0:
-            raise ValueError("Z-test requires n1 > 0 and n2 > 0.")
+            raise ValueError("Z-test requires n1 > 0 and n2 > 0")
 
-        if sigma1_sq <= 0 or sigma2_sq <= 0:
-            raise ValueError("sigma1_sq and sigma2_sq must be positive.")
+        if sigma1_sq <= 0.0 or sigma2_sq <= 0.0:
+            raise ValueError("sigma1_sq and sigma2_sq must be positive")
 
-        # ============================================================
-        # 1. Sufficient statistics
-        #    S = Σx
-        # ============================================================
+        if alpha is None and score_bound is not None:
+            raise ValueError("score_bound requires an alpha for decision mode")
 
-        S1 = ho.sum(x1)
-        S2 = ho.sum(x2)
+        if alpha is not None:
+            if not np.isfinite(alpha) or not 0.0 < alpha < 1.0:
+                raise ValueError("alpha must be a finite value in (0, 1)")
 
-        # ============================================================
-        # 2. Mean
-        #    mean = S / n
-        # ============================================================
+            if (
+                score_bound is None
+                or not np.isfinite(score_bound)
+                or score_bound <= 0.0
+            ):
+                raise ValueError(
+                    "decision mode requires a finite positive score_bound"
+                )
 
-        mean_x1 = ho.mult_const(S1, 1.0 / n1)
-        mean_x2 = ho.mult_const(S2, 1.0 / n2)
+        s1 = self.engine.sum(x1)
+        s2 = self.engine.sum(x2)
 
-        # ============================================================
-        # 3. Numerator
-        #    mean1 - mean2 - delta0
-        # ============================================================
+        mean1 = self.engine.mult(s1, 1.0 / n1)
+        mean2 = self.engine.mult(s2, 1.0 / n2)
 
-        numerator = ho.sub(mean_x1, mean_x2)
+        numerator = self.engine.sub(mean1, mean2)
 
         if delta0 != 0.0:
-            numerator = ho.add_const(numerator, -delta0)
+            numerator = self.engine.sub(numerator, delta0)
 
-        # ============================================================
-        # 4. Public denominator
-        #
-        #    V = sigma1_sq/n1 + sigma2_sq/n2
-        # ============================================================
+        v_public = sigma1_sq / n1 + sigma2_sq / n2
 
-        V_public = sigma1_sq / n1 + sigma2_sq / n2
+        if v_public <= 0.0:
+            raise ValueError("V_public must be positive")
 
-        if V_public <= 0:
-            raise ValueError("V_public must be positive.")
+        z = self.engine.mult(numerator, 1.0 / np.sqrt(v_public))
 
-        inv_sqrt_V = 1.0 / np.sqrt(V_public)
+        if alpha is None:
+            return z
 
-        Z = ho.mult_const(numerator, inv_sqrt_V)
+        critical_value = NormalDist().inv_cdf(1.0 - alpha / 2.0)
 
-        if return_debug:
-            return {
-                "Z": Z,
-                "mean_x1": mean_x1,
-                "mean_x2": mean_x2,
-                "V_public": V_public,
-                "sigma1_sq": sigma1_sq,
-                "sigma2_sq": sigma2_sq,
-                "delta0": delta0,
-            }
+        z_squared = self.engine.mult(z, z)
+        score = self.engine.sub(z_squared, critical_value ** 2)
 
-        return Z
+        normalized_score = self.engine.mult(score, 1.0 / score_bound)
+        sign_score = self.stats.sign(normalized_score)
+
+        step = self.engine.add(sign_score, 1.0)
+        step = self.engine.mult(step, 0.5)
+
+        return step
