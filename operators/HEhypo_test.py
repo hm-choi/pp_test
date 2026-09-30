@@ -76,12 +76,24 @@ class HEHypothesisTesting:
         if len(coeffs_arr) < 2 or not np.all(np.isfinite(coeffs_arr)):
             raise ValueError("Critical-value coefficients must be finite")
 
-        # Map InvDF from [0, 1] to the Chebyshev domain [-1, 1]:
-        # z = 2 * InvDF - 1 = 2 / df - 1.
-        z = self.engine.add(inv_df, inv_df)
-        z = self.engine.sub(z, 1.0)
+        # InvDF = 1 / df with df in [1, 2000], so
+        # InvDF lies in [1/2000, 1].
+        u_min = 1.0 / 2000.0
+        u_max = 1.0
 
-        # Ensure sufficient levels before Chebyshev evaluation.
+        # Map InvDF from [u_min, u_max] to the Chebyshev domain [-1, 1]:
+        #
+        # z = 2 * InvDF / (u_max - u_min)
+        #     - (u_max + u_min) / (u_max - u_min).
+        z = self.engine.mult(
+            inv_df,
+            2.0 / (u_max - u_min),
+        )
+        z = self.engine.sub(
+            z,
+            (u_max + u_min) / (u_max - u_min),
+        )
+
         self.engine._ensure_cheb_level(z, degree)
 
         coeffs = self.engine._make_cheb_coeffs(coeffs_arr)
