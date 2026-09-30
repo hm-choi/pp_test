@@ -51,7 +51,6 @@ class HEengine:
         ) + os.sep
 
         self.SK_name = "SK"
-        self.PK_name = "PK"
 
         self.context = None
         self.sk = None
@@ -87,21 +86,22 @@ class HEengine:
         os.makedirs(self.key_dir_path, exist_ok=True)
 
         self._load_keys()
-        self._init_operators()
 
-        if self.warmup_bootstrap:
+        try:
+            self._init_operators()
+            self._warmup_bootstrap()
+        except:
+            self._init_operators()
             self._warmup_bootstrap()
 
         return self
 
     def _load_keys(self):
 
-        sk_path = self.key_dir_path + self.SK_name
-
         try:
             self.sk = hn.SecretKey(
                 self.context,
-                sk_path,
+                self.key_dir_path + self.SK_name,
             )
             self.pk = hn.KeyPack(
                 self.context,
@@ -110,12 +110,9 @@ class HEengine:
 
         except Exception:
             self.sk = hn.SecretKey(self.context)
-            self.sk.save(sk_path)
+            self.sk.save(self.key_dir_path + self.SK_name)
 
-            keygen = hn.KeyGenerator(
-                self.context,
-                self.sk,
-            )
+            keygen = hn.KeyGenerator(self.context, self.sk)
             keygen.gen_common_keys()
             keygen.gen_rot_keys_for_bootstrap(self.log_slots)
             keygen.save(self.key_dir_path)
@@ -124,29 +121,22 @@ class HEengine:
 
     def _init_operators(self):
 
-        if self.is_gpu():
-            self.sk.to(self.dt)
-            self.pk.to(self.dt)
+        self.sk.to(self.dt)
+        self.pk.to(self.dt)
 
         self.ect = hn.Encryptor(self.context)
         self.dct = hn.Decryptor(self.context)
-        self.evt = hn.HomEvaluator(
-            self.context,
-            self.pk,
-        )
+        self.evt = hn.HomEvaluator(self.context, self.pk)
         self.bts = hn.Bootstrapper(self.evt)
 
     def _warmup_bootstrap(self):
 
-        msg = hn.Message(np.zeros(self.num_slots, dtype=np.float64))
-
+        msg = Message(1)
         if self.is_gpu():
             msg.to(self.dt)
-
-        ctxt = hn.Ciphertext(self.context)
-
-        self.ect.encrypt(msg, self.pk, ctxt)
-        self.bts.bootstrap(ctxt, ctxt)
+            
+        ctxt = self.enc(msg)
+        self.bootstrap(ctxt)
 
     def enc(self, msg, level=12):
 
