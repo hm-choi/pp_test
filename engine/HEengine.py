@@ -1,8 +1,10 @@
-import os
+import os, math
 import numpy as np
 import heaan as hn
 
 from engine.HEdata import Message, Ciphertext
+
+from engine.chebyshev_eval import next_power_of_two_sqrt, make_hn_cheb
 
 
 class HEengine:
@@ -371,7 +373,25 @@ class HEengine:
                 self.evt.level_down(ret[i], target_level, ret[i])
 
         return ret
+        
+    def _ensure_cheb_level(self, ctxt: Ciphertext, degree: int):
 
+        required_levels = math.ceil(math.log2(degree)) + 3
+
+        if ctxt.level() < required_levels:
+            self._bootstrap(ctxt)
+
+    def _make_cheb_coeffs(
+        self,
+        coeffs,
+    ) -> hn.math.approx.ChebyshevCoefficients:
+        coeffs = np.asarray(coeffs, dtype=np.float64)
+
+        degree = len(coeffs) - 1
+        baby_step = next_power_of_two_sqrt(degree)
+
+        return make_hn_cheb(coeffs, baby_step)
+    
     def evaluate_chebyshev(self, ctxt, coeffs, scale=1.0):
 
         if not isinstance(ctxt, Ciphertext):

@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from pp_test.engine.HEengine import HEEngine
-from operators.hypothesis_testing import HEHypothesisTesting
+from pp_test.operators.HEhypo_test import HEHypothesisTesting
 from operators.operator import HEOperator
 from sota.annamalai2022_welch_mhe_arithmetic import (
     Annamalai2022WelchArithmetic,

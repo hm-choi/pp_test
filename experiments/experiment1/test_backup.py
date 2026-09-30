@@ -14,7 +14,7 @@ from utils.welch import (
     welch_t_test_from_sufficient_statistics,
 )
 from pp_test.engine.HEengine import HEEngine
-from operators.hypothesis_testing import HEHypothesisTesting
+from pp_test.operators.HEhypo_test import HEHypothesisTesting
 from operators.operator import HEOperator
 
 
