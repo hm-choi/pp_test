@@ -8,7 +8,6 @@ from engine.HEdata import Ciphertext
 from engine.chebyshev_eval import next_power_of_two_sqrt, make_hn_cheb
 
 from coeffs.invSqrt_coeffs import _INV_SQRT_COEFFS
-from coeffs.sqrt_coeffs import _SQRT_COEFFS
 from coeffs.sign_coeffs import _SIGN_PPTEST_DATA
 
 
@@ -49,8 +48,6 @@ class HEStats:
 
         if prefix == "inv":
             coeffs_data = _INV_SQRT_COEFFS
-        elif prefix == "sqrt":
-            coeffs_data = _SQRT_COEFFS
         else:
             raise ValueError(f"Unsupported coefficient prefix: {prefix}")
 

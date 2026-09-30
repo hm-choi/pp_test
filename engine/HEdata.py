@@ -12,10 +12,12 @@ class Message:
             self.data = []
             for i in range(0, len(input), num_slots):
                 chunk = input[i:i + num_slots]
+
                 if len(chunk) < num_slots:
-                    padded = np.zeros(num_slots, dtype=input.dtype)
+                    padded = np.full(num_slots, value, dtype=input.dtype)
                     padded[:len(chunk)] = chunk
                     chunk = padded
+
                 self.data.append(hn.Message(chunk))
 
         elif isinstance(input, int):

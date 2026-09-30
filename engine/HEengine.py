@@ -2,7 +2,7 @@ import os
 import numpy as np
 import heaan as hn
 
-from HEdata import Message, Ciphertext
+from engine.HEdata import Message, Ciphertext
 
 
 class HEengine:
@@ -10,7 +10,7 @@ class HEengine:
     def __init__(
         self,
         params=hn.ParameterPreset.FGb,
-        device_type="cpu",
+        device_type="gpu",
         device_id=0,
         log_slots=15,
         setting_root="/root/heaan_setting/",

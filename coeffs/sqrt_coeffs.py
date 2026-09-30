@@ -1,3 +1,0 @@
-_SQRT_COEFFS = [
-    
-]
