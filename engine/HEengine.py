@@ -123,8 +123,9 @@ class HEengine:
 
     def _init_operators(self):
 
-        self.sk.to(self.dt)
-        self.pk.to(self.dt)
+        if self.is_gpu():
+            self.sk.to(self.dt)
+            self.pk.to(self.dt)
 
         self.ect = hn.Encryptor(self.context)
         self.dct = hn.Decryptor(self.context)
@@ -240,15 +241,23 @@ class HEengine:
         if not isinstance(rhs, (int, np.integer)):
             raise TypeError("rhs must be an integer")
 
-        if not hasattr(self.evt, "mult_integer"):
+        # The method is named mult_integer or integer_mult depending on
+        # the HEaaN build.
+        mult_integer = getattr(
+            self.evt,
+            "mult_integer",
+            getattr(self.evt, "integer_mult", None),
+        )
+
+        if mult_integer is None:
             raise RuntimeError(
-                "The current HEaaN evaluator does not support mult_integer"
+                "The current HEaaN evaluator does not support integer multiplication"
             )
 
         ret = Ciphertext(len(lhs), self.context)
 
         for i in range(len(lhs)):
-            self.evt.mult_integer(lhs[i], int(rhs), ret[i])
+            mult_integer(lhs[i], int(rhs), ret[i])
 
         return ret
 
@@ -279,16 +288,40 @@ class HEengine:
             return self._mult_integer(oprd1, int(oprd2))
 
         if isinstance(oprd2, (float, np.floating)):
-            ret = Ciphertext(len(oprd1), self.context)
+            ret = oprd1
 
-            for i in range(len(oprd1)):
-                self.evt.mult(oprd1[i], float(oprd2), ret[i])
+            # HEaaN encodes a real constant with limited absolute precision:
+            # constants below ~1e-8 become 0 and the relative error grows as
+            # the constant shrinks. Small constants are therefore applied as
+            # a product of factors >= MIN_CONST (one level per factor).
+            for factor in self._const_factors(float(oprd2)):
+                out = Ciphertext(len(oprd1), self.context)
+
+                for i in range(len(oprd1)):
+                    self.evt.mult(ret[i], factor, out[i])
+
+                ret = out
 
             return ret
 
         raise TypeError(
             "oprd2 must be Ciphertext, Message, int, or float"
         )
+
+    MIN_CONST = 1e-4
+
+    @classmethod
+    def _const_factors(cls, c):
+
+        a = abs(c)
+
+        if a == 0.0 or a >= cls.MIN_CONST:
+            return [c]
+
+        k = math.ceil(math.log(a) / math.log(cls.MIN_CONST))
+        f = a ** (1.0 / k)
+
+        return [math.copysign(f, c)] + [f] * (k - 1)
 
     def square(self, oprd):
 
@@ -379,7 +412,7 @@ class HEengine:
         required_levels = math.ceil(math.log2(degree)) + 3
 
         if ctxt.level() < required_levels:
-            self._bootstrap(ctxt)
+            self.bootstrap(ctxt)
 
     def _make_cheb_coeffs(
         self,
