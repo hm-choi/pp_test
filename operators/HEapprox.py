@@ -25,10 +25,9 @@ class HEApprox:
         self.engine = engine
         self._bootstrap_count = 0
 
-        # Runtime-generated inverse square root coefficients and
-        # Chebyshev output bounds, keyed by (domain, log_degree).
+        # Runtime-generated inverse square root coefficients,
+        # keyed by (domain, log_degree).
         self._coeff_cache = {}
-        self._cheb_bound_cache = {}
 
     def bootstrap_count(
         self,
@@ -171,22 +170,6 @@ class HEApprox:
             self._coeff_cache[key] = poly.coef.astype(np.float64)
 
         return self._coeff_cache[key]
-
-    def _cheb_bound(
-        self,
-        coeffs,
-    ):
-
-        # Upper bound of |P(t)| on [-1, 1] with a 20% margin over a dense
-        # grid (P is steep near t = -1, so CKKS noise on t needs headroom).
-        key = coeffs.tobytes()
-
-        if key not in self._cheb_bound_cache:
-            grid = np.linspace(-1.0, 1.0, 100001)
-            bound = np.max(np.abs(np.polynomial.chebyshev.chebval(grid, coeffs)))
-            self._cheb_bound_cache[key] = 1.2 * float(bound)
-
-        return self._cheb_bound_cache[key]
 
     def invSqrt(
         self,
@@ -336,24 +319,20 @@ class HEApprox:
         # before evaluating the Chebyshev polynomial.
         self._ensure_cheb_level(x, degree)
 
-        if x.level() - log_degree >= 4:
-            return self.engine.evaluate_chebyshev(
-                x,
-                self.engine._make_cheb_coeffs(coeffs),
-            )
-
-        # The output level (3) is too low for the extended bootstrap:
-        # evaluate P / bound (inside [-1, 1]), apply the regular bootstrap,
-        # then rescale.
-        bound = self._cheb_bound(coeffs)
-
         y = self.engine.evaluate_chebyshev(
             x,
-            self.engine._make_cheb_coeffs(coeffs / bound),
+            self.engine._make_cheb_coeffs(coeffs),
         )
-        self._bootstrap(y)
 
-        return self.engine.mult(y, bound)
+        # Refresh y0 with the regular bootstrap when the first Newton step
+        # would need a bootstrap. y0 may exceed [-1, 1] (up to 1/sqrt(v_min));
+        # the regular bootstrap then adds a relative error of about
+        # 1e-7 * |y0|^2 (1e-4 at |y0| = 31.6), which the following Newton
+        # iterations refine, so the extended bootstrap is not needed here.
+        if y.level() <= 5:
+            self._bootstrap(y)
+
+        return y
 
     # ------------------------------------------------------------------
     # Sign

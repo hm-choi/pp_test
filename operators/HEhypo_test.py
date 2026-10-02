@@ -403,7 +403,7 @@ class HEHypothesisTesting:
         alpha=0.05,
         critical_log_degree=4,
         score_bound=1.0,
-        target="t",
+        target="t2",
         trace=None,
     ):
 
@@ -475,7 +475,7 @@ class HEHypothesisTesting:
         alpha=0.05,
         critical_log_degree=4,
         score_bound=1.0,
-        target="t",
+        target="t2",
         trace=None,
     ):
 

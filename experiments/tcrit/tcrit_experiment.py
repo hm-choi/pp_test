@@ -12,7 +12,10 @@ Plaintext part (--part plain):
     - lookup_table   : table lookup at tabulated df values
                        (distribution_table/t_distribution_table.csv grid), using
                        the largest tabulated df <= df (conservative rule);
-                       reported over df in [1, 2000], df in [2, 2000] and each
+    - lookup_integer_floor / lookup_integer_round : a table of every integer
+                       df in [1, 2000] with floor / round of the real-valued df
+                       (as in table-lookup based secure testing);
+                       lookups are reported over df >= 1, 2, 10, 30 and each
                        dataset case's df range.
     The invdf rows are also evaluated on df in (2000, 4096] (extrapolation
     beyond the approximation domain; Adult cases have Welch df ~2035-2038).
@@ -111,15 +114,23 @@ def run_plain(out_dir):
         for target, power in TARGETS.items():
             y_true = exact(alpha, df, power)
 
-            # Lookup table (degree-independent).
+            # Lookup tables (degree-independent):
+            # - lookup_table          : textbook df grid, largest tabulated df <= df;
+            # - lookup_integer_floor  : every integer df in [1, 2000], floor(df);
+            # - lookup_integer_round  : every integer df in [1, 2000], round(df).
             idx = np.searchsorted(table_df, df, side="right") - 1
-            y_table = exact(alpha, table_df[idx], power)
-            rows.append({"method": "lookup_table", "domain": "df in [1, 2000]", "target": target,
-                         "degree": "", "alpha": alpha, "levels": "", **errors(y_table, y_true)})
-            mask = df >= 2.0
-            rows.append({"method": "lookup_table", "domain": "df in [2, 2000]", "target": target,
-                         "degree": "", "alpha": alpha, "levels": "",
-                         **errors(y_table[mask], y_true[mask])})
+            lookups = {
+                "lookup_table": exact(alpha, table_df[idx], power),
+                "lookup_integer_floor": exact(alpha, np.floor(df), power),
+                "lookup_integer_round": exact(alpha, np.maximum(1.0, np.round(df)), power),
+            }
+
+            for method, y_table in lookups.items():
+                for lo in (1.0, 2.0, 10.0, 30.0):
+                    mask = df >= lo
+                    rows.append({"method": method, "domain": f"df in [{lo:g}, 2000]", "target": target,
+                                 "degree": "", "alpha": alpha, "levels": "",
+                                 **errors(y_table[mask], y_true[mask])})
 
             for name, case in cases.items():
                 lo = float(min(case["n1"], case["n2"]) - 1)

@@ -106,8 +106,8 @@ def run_once(engine, approx, config, x):
     ctxt = engine.enc(Message(x, engine.log_slots), level=config["level"])
     x_dec = decrypt(engine, ctxt, len(x))
 
-    # One-off plaintext work (coefficients, P/bound) outside the timer.
-    approx._cheb_bound(approx.inv_sqrt_coeffs(log_degree, dom, config["method"]))
+    # One-off plaintext work (coefficients) outside the timer.
+    approx.inv_sqrt_coeffs(log_degree, dom, config["method"])
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()

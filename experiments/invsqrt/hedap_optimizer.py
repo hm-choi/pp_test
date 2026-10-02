@@ -22,14 +22,15 @@ Differences from the Lattigo reference code:
   supplementary selection with the algorithmic MaxRE is reported.
 
 HEaaN-specific choices in HEApprox.invSqrt (they shape the search space):
-- y (in [1/sqrt(hi), 1/sqrt(lo)]) is refreshed with the extended bootstrap
-  (input range 2^20, min level 4) instead of Lattigo's DoBootstrap(y, 4);
+- y in the Newton steps (in [1/sqrt(hi), 1/sqrt(lo)]) is refreshed with the
+  extended bootstrap (input range 2^20, min level 4) instead of Lattigo's
+  DoBootstrap(y, 4);
 - x_half is bootstrapped only when its level is <= 5, so with c = 0 a low
   input level makes every Newton step end at level 4-5 and bootstrap y
   (this is the trade-off the Pre-BTS indicator c explores);
 - Pre-BTS bootstraps x_cheb (in [-1, 1]) and derives x_half from it;
-- when the Chebyshev output would be at level 3 (too low for the extended
-  bootstrap), P / bound is evaluated, bootstrapped and rescaled.
+- the Chebyshev output y0 is refreshed with the regular bootstrap (its
+  error for |y0| > 1 is refined by the following Newton iterations).
 
 Run (inside the HEaaN container, cwd = project root):
     python3 experiments/invsqrt/hedap_optimizer.py --domains raw
@@ -150,8 +151,8 @@ def get_opt_iter(approx, ctxt, ans, domain, log_degree, pre_bts, i_max=I_MAX):
     x_dec = decrypt(engine, ctxt, len(ans))
     ans_alg = np.maximum(x_dec, np.finfo(float).tiny) ** -0.5
 
-    # One-off plaintext work (coefficients, P/bound) outside the timer.
-    approx._cheb_bound(approx.inv_sqrt_coeffs(log_degree, dom, domain["method"]))
+    # One-off plaintext work (coefficients) outside the timer.
+    approx.inv_sqrt_coeffs(log_degree, dom, domain["method"])
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()
