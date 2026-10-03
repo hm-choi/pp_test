@@ -28,8 +28,17 @@ Timing: statistics and each decision branch are timed separately (encryption
 and decryption excluded); the total for one test at one alpha is
 statistics + that branch.
 
+Product-score comparison (--score product, results in results/product/): the
+decision scores are multiplied out so that the scores themselves contain no
+division by an encrypted variance and have public bounds (Welch still needs
+invSqrt for 1/df, so V must stay inside the invSqrt domain):
+- Welch : s'  = (mean1 - mean2)^2 - c^2 V,  B = max(R^2, c_max^2 V_max);
+- F     : s'' = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2),
+          B = max(A, F_L B_v) max(A, F_U B_v)  (no invSqrt in the decision);
+- Z     : unchanged score, public bound max(R^2 / V_public, z^2).
+
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/pptest_eval/run_eval.py
+    python3 experiments/pptest_eval/run_eval.py [--score product]
 """
 
 import argparse
@@ -86,7 +95,8 @@ def welch_plain(x1, x2, alpha):
     crit = stats.t.ppf(1.0 - alpha / 2.0, df)
     p = 2.0 * stats.t.sf(np.sqrt(t2), df)
 
-    return {"stat": t2, "inv_df": 1.0 / df, "critical": crit, "score": t2 - crit ** 2, "p": p}
+    return {"stat": t2, "inv_df": 1.0 / df, "critical": crit, "score": t2 - crit ** 2, "p": p,
+            "score_product": (np.mean(x1) - np.mean(x2)) ** 2 - crit ** 2 * v}
 
 
 def f_plain(x1, x2, alpha):
@@ -97,7 +107,9 @@ def f_plain(x1, x2, alpha):
     fu = stats.f.ppf(1.0 - alpha / 2.0, n1 - 1, n2 - 1)
     p = 2.0 * min(stats.f.cdf(f, n1 - 1, n2 - 1), stats.f.sf(f, n1 - 1, n2 - 1))
 
-    return {"stat": f, "fl": fl, "fu": fu, "score": (f - fl) * (f - fu), "p": p}
+    v1, v2 = np.var(x1, ddof=1), np.var(x2, ddof=1)
+    return {"stat": f, "fl": fl, "fu": fu, "score": (f - fl) * (f - fu), "p": p,
+            "score_product": (v1 - fl * v2) * (v1 - fu * v2)}
 
 
 def z_plain(x1, x2, alpha, s1, s2):
@@ -107,7 +119,8 @@ def z_plain(x1, x2, alpha, s1, s2):
     crit = stats.norm.ppf(1.0 - alpha / 2.0)
     p = 2.0 * stats.norm.sf(abs(z))
 
-    return {"stat": z, "critical": crit, "score": z ** 2 - crit ** 2, "p": p}
+    return {"stat": z, "critical": crit, "score": z ** 2 - crit ** 2, "p": p,
+            "score_product": z ** 2 - crit ** 2}
 
 
 def score_bound(scores):
@@ -269,16 +282,83 @@ def run_z(engine, ht, case, c1, c2, bounds):
     return rows
 
 
+def run_welch_product(engine, ht, case, c1, c2):
+
+    # score="product": s' = (mean1 - mean2)^2 - c^2 V with the public bound.
+    tr = {}
+
+    (t2, inv_df, terms), st, sb = timed(ht, lambda: ht.HE_Welch_statistics(
+        c1, c2, case["n1"], case["n2"], case["R"], tr, return_terms=True))
+
+    branches = []
+
+    for alpha in ALPHAS:
+        for target in TARGETS:
+            btr = {}
+            step, dt, db = timed(ht, lambda: ht.HE_Welch_decision(
+                t2, inv_df, alpha, CRITICAL_LOG_DEGREE, None, target, btr, "product", terms))
+            branches.append((alpha, target, step, dt, db, btr))
+
+    he_t2 = first(engine, tr["t_squared"])
+    he_inv_df = first(engine, tr["inv_df"])
+    rows = []
+
+    for alpha, target, step, dt, db, btr in branches:
+        B = btr["score_bound"]
+        norm = B * terms["x_scale"]
+        cs = first(engine, btr["critical_scaled"])
+        he_crit = cs * math.sqrt(norm) if target == "t" else math.sqrt(max(cs * norm, 0.0))
+        he_p = 2.0 * stats.t.sf(math.sqrt(max(he_t2, 0.0)), 1.0 / he_inv_df)
+        rows.append(dict(alpha=alpha, target=target, stats_time=st, decision_time=dt,
+                         stats_bootstraps=sb, decision_bootstraps=db,
+                         he_stat=he_t2, he_inv_df=he_inv_df, he_critical=he_crit,
+                         he_score=first(engine, btr["score_normalized"]) * B, score_bound=B,
+                         he_sign=first(engine, btr["sign"]), he_step=first(engine, step), he_p=he_p))
+
+    return rows
+
+
+def run_f_product(engine, ht, case, c1, c2, plain):
+
+    # score="product": s'' = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2); no invSqrt,
+    # so the F statistic itself (and its p-value) is not computed here.
+    terms, st, sb = timed(ht, lambda: ht.HE_F_terms(c1, c2, case["n1"], case["n2"], case["R"]))
+
+    branches = []
+
+    for alpha in ALPHAS:
+        btr = {}
+        p = plain[alpha]
+        step, dt, db = timed(ht, lambda: ht.HE_F_product_decision(terms, p["fl"], p["fu"], btr))
+        branches.append((alpha, step, dt, db, btr))
+
+    rows = []
+
+    for alpha, step, dt, db, btr in branches:
+        B = btr["score_bound"]
+        rows.append(dict(alpha=alpha, target="", stats_time=st, decision_time=dt,
+                         stats_bootstraps=sb, decision_bootstraps=db,
+                         he_stat=None, he_score=first(engine, btr["score_normalized"]) * B, score_bound=B,
+                         he_sign=first(engine, btr["sign"]), he_step=first(engine, step), he_p=None))
+
+    return rows
+
+
 def complete(row, plain, alpha):
 
     p = plain[alpha]
     row["plain_stat"] = p["stat"]
-    row["stat_abs_err"] = abs(row["he_stat"] - p["stat"])
-    row["stat_rel_err"] = row["stat_abs_err"] / abs(p["stat"])
     row["plain_score"] = p["score"]
     row["score_abs_err"] = abs(row["he_score"] - p["score"])
     row["plain_p"] = p["p"]
-    row["p_abs_err"] = abs(row["he_p"] - p["p"])
+
+    if row.get("he_stat") is not None:
+        row["stat_abs_err"] = abs(row["he_stat"] - p["stat"])
+        row["stat_rel_err"] = row["stat_abs_err"] / abs(p["stat"])
+
+    if row.get("he_p") is not None:
+        row["p_abs_err"] = abs(row["he_p"] - p["p"])
+        row["p_decision"] = int(row["he_p"] < alpha)
 
     if "inv_df" in p:
         row["plain_inv_df"] = p["inv_df"]
@@ -291,7 +371,6 @@ def complete(row, plain, alpha):
     row["plain_decision"] = int(p["score"] > 0.0)
     row["step_decision"] = int(row["he_step"] > 0.5)
     row["score_decision"] = int(row["he_score"] > 0.0)
-    row["p_decision"] = int(row["he_p"] < alpha)
     row["total_time"] = row["stats_time"] + row["decision_time"]
 
     return row
@@ -344,7 +423,8 @@ def summarize(raw_path, summary_path):
             "plain_decision": plain_dec,
             "step_match_rate": np.mean([int(r["step_decision"]) == plain_dec for r in rs]),
             "score_decision_match_rate": np.mean([int(r["score_decision"]) == plain_dec for r in rs]),
-            "p_decision_match_rate": np.mean([int(r["p_decision"]) == plain_dec for r in rs]),
+            "p_decision_match_rate": (np.mean([int(r["p_decision"]) == plain_dec for r in rs if r["p_decision"] != ""])
+                                      if any(r["p_decision"] != "" for r in rs) else ""),
             "step_min": col(rs, "he_step").min(),
             "step_max": col(rs, "he_step").max(),
         })
@@ -364,9 +444,15 @@ def main():
     parser.add_argument("--cases", default="all")
     parser.add_argument("--tests", default="welch,f,z")
     parser.add_argument("--configs", default="all")
-    parser.add_argument("--out-dir", type=Path, default=RESULT_DIR)
+    parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--summary-only", action="store_true")
+    parser.add_argument("--score", choices=["ratio", "product"], default="ratio",
+                        help="ratio: T^2 - c^2 (data-chosen bound, results/); "
+                             "product: multiplied-out scores with public bounds (results/product/)")
     args = parser.parse_args()
+
+    if args.out_dir is None:
+        args.out_dir = RESULT_DIR if args.score == "ratio" else RESULT_DIR / "product"
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     raw_path = args.out_dir / "eval_raw.csv"
@@ -409,17 +495,28 @@ def main():
                 "z": {a: z_plain(x1, x2, a, s1, s2) for a in ALPHAS},
             }
 
-            for test in args.tests.split(","):
-                bound = score_bound([plain[test][a]["score"] for a in ALPHAS])
-                bounds = {a: float(bound) for a in ALPHAS}
+            if args.score == "product":
+                plain = {t: {a: {**v, "score": v["score_product"]} for a, v in d.items()} for t, d in plain.items()}
 
-                # Valid sign input range: 1.5e-7 < |score / B| < 1.
-                ratios = [abs(plain[test][a]["score"]) / bound for a in ALPHAS]
-                assert 1e-5 < min(ratios) and max(ratios) < 1.0, (case_name, test, ratios)
-                meta[f"{case_name}/{test}"] = {"score_bound": bound, "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
+            for test in args.tests.split(","):
+                if args.score == "ratio":
+                    bound = score_bound([plain[test][a]["score"] for a in ALPHAS])
+                    bounds = {a: float(bound) for a in ALPHAS}
+
+                    # Valid sign input range: 1.5e-7 < |score / B| < 1.
+                    ratios = [abs(plain[test][a]["score"]) / bound for a in ALPHAS]
+                    assert 1e-5 < min(ratios) and max(ratios) < 1.0, (case_name, test, ratios)
+                    meta[f"{case_name}/{test}"] = {"score_bound": bound, "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
+                else:
+                    # Public bounds (Z: max(R^2 / V_public, z^2); Welch / F: computed in the decision).
+                    bounds = {a: HEHypothesisTesting.z_public_bound(case["R"], s1, s2, case["n1"], case["n2"], a)
+                              for a in ALPHAS}
+                    meta[f"{case_name}/{test}"] = {"score": "product", "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
 
                 if test == "z":
                     configs = {"public_variance": None}
+                elif test == "f" and args.score == "product":
+                    configs = {"no_invsqrt": None}
                 else:
                     names = INVSQRT_CONFIG_NAMES if args.configs == "all" else args.configs.split(",")
                     configs = {name: invsqrt_config(name, case_name, test) for name in names}
@@ -436,9 +533,11 @@ def main():
                         c2 = engine.enc(Message(x2, engine.log_slots))
 
                         if test == "welch":
-                            rows = run_welch(engine, ht, case, c1, c2, bounds)
+                            rows = (run_welch(engine, ht, case, c1, c2, bounds) if args.score == "ratio"
+                                    else run_welch_product(engine, ht, case, c1, c2))
                         elif test == "f":
-                            rows = run_f(engine, ht, case, c1, c2, bounds, plain["f"])
+                            rows = (run_f(engine, ht, case, c1, c2, bounds, plain["f"]) if args.score == "ratio"
+                                    else run_f_product(engine, ht, case, c1, c2, plain["f"]))
                         else:
                             rows = run_z(engine, ht, case, c1, c2, bounds)
 
@@ -452,7 +551,7 @@ def main():
                         r0 = rows[0]
                         print(f"{case_name} {test} {config_name} rep={rep} stats={r0['stats_time']:.1f}s "
                               f"decision={np.mean([r['decision_time'] for r in rows]):.1f}s "
-                              f"stat_rel_err={max(r['stat_rel_err'] for r in rows):.2e} "
+                              f"score_abs_err={max(r['score_abs_err'] for r in rows):.2e} "
                               f"step_match={sum(r['step_decision'] == r['plain_decision'] for r in rows)}/{len(rows)}",
                               flush=True)
 

@@ -74,3 +74,40 @@ full decision (sign/step) at degree 15. 10 repetitions per margin and invSqrt co
 | 127 | t2 | no | 320 | 100% | - | 2.85e-07 | 1.63e-06 | 3.36 |
 
 All 3840 results match the plaintext decision (all invSqrt configurations: normalized v_min 1e-3/1e-4/1e-5 and raw_default).
+
+## Ratio vs product score (`--score product`, `results/product/`)
+
+- ratio: s = T^2 - c^2 (Welch), (F - F_L)(F - F_U) (F), Z^2 - z^2 (Z); score bound chosen from the plaintext scores (not public).
+- product: s' = (mean1 - mean2)^2 - c^2 V, B = max(R^2, c_max^2 V_max) with c_max at df = min(n1, n2) - 1;
+  s'' = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2), B = max(A, F_L B_v) max(A, F_U B_v) (no invSqrt in the F decision);
+  Z unchanged with B = max(R^2 / V_public, z^2). All bounds use only public values (R, n1, n2, alpha).
+
+Product decisions match SciPy in **144/144** configurations (all 10 reps). F product has a single configuration (`no_invsqrt`) and reports no F statistic / p-value.
+
+alpha = 0.05, Welch target t^2, normalized v_min = 1e-3 (F product: no_invsqrt):
+
+| case | test | time ratio (s) | time product (s) | BTS ratio -> product | \|s/B\| ratio | \|s/B\| product | product HE err / B |
+|---|---|---|---|---|---|---|---|
+| insurance_charges_smoker | welch | 24.8 +- 1.4 | 25.6 +- 1.6 | 8 -> 8 | 3.6e-01 | 1.4e-01 | 7.1e-10 |
+| insurance_charges_smoker | f | 21.2 +- 0.3 | 10.8 +- 0.3 | 7 -> 4 | 3.6e-01 | 7.4e-03 | 4.0e-10 |
+| insurance_charges_smoker | z | 10.3 +- 0.3 | 10.4 +- 0.6 | 4 -> 4 | 3.6e-01 | 1.4e-01 | 3.7e-10 |
+| adult_edu_income | welch | 24.5 +- 1.0 | 25.8 +- 0.8 | 8 -> 8 | 4.6e-01 | 1.5e-02 | 6.8e-10 |
+| adult_edu_income | f | 21.6 +- 0.8 | 10.0 +- 0.1 | 7 -> 4 | 4.8e-02 | 9.1e-06 | 2.9e-10 |
+| adult_edu_income | z | 10.1 +- 0.4 | 9.6 +- 0.1 | 4 -> 4 | 4.6e-01 | 1.5e-02 | 2.1e-10 |
+| adult_age_gender | welch | 25.1 +- 0.9 | 25.4 +- 1.8 | 8 -> 8 | 3.8e-01 | 3.5e-04 | 4.2e-10 |
+| adult_age_gender | f | 24.4 +- 1.0 | 10.8 +- 0.5 | 8 -> 4 | 2.6e-01 | 5.4e-05 | 2.9e-10 |
+| adult_age_gender | z | 10.4 +- 0.5 | 10.5 +- 0.6 | 4 -> 4 | 3.8e-01 | 3.5e-04 | 6.9e-12 |
+
+Stress test (section 4.5 design), product score with the public bound:
+
+| score | results | score sign match | step match (degree 15) | min \|s/B\| (margin +-0.001) | max HE err / B |
+|---|---|---|---|---|---|
+| ratio (B = 0.05) | 3840 | 3840/3840 | 640/640 | 7.9e-02 | 3.3e-05 |
+| product (public B) | 3840 | 3840/3840 | 640/640 | 2.2e-06 | 1.5e-09 |
+
+Notes:
+- Public bounds are much larger than data-fitted ones, so |s/B| shrinks (smallest: 2.2e-6 in the stress test, 9.1e-6 for Adult educational-num F);
+  still above the sign validity floor (1.5e-7) and about 1000x above the HE error / B (~1e-9).
+- Welch: same time and bootstraps as ratio; the score no longer divides by V, but 1/df still uses invSqrt (V inside the invSqrt domain).
+- F: invSqrt leaves the decision path: about 10-11 s instead of 21-24 s, 4 bootstraps instead of 7-8.
+- Degree-7 t^2 critical values have HE error close to the stress margin (margin / error >= 1.7) in both modes; degree 15 is used by default.

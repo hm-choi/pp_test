@@ -259,10 +259,12 @@ class HEHypothesisTesting:
         n2: int,
         R: float,
         trace=None,
+        return_terms=False,
     ):
 
         # Returns encrypted (T^2, 1/df); both are shared by every
-        # significance level.
+        # significance level. With return_terms=True, also returns the
+        # terms of the product score (HE_Welch_decision, score="product").
         if n1 <= 1 or n2 <= 1:
             raise ValueError("Welch t-test requires both groups to have n > 1")
 
@@ -394,7 +396,32 @@ class HEHypothesisTesting:
         )
         self._trace(trace, "t_squared", t_squared)
 
-        return t_squared, inv_df
+        if not return_terms:
+            return t_squared, inv_df
+
+        # Terms of the product score s' = (mean1 - mean2)^2 - c^2 V, kept
+        # in x_scale units: delta_sq_scaled = x_scale (mean1 - mean2)^2 and
+        # x = x_scale V (public bounds R^2 and v_max).
+        x = None
+
+        for ctxt, factor in (
+            (scaled_var1, x_scale / n1 / n1 / (n1 - 1)),
+            (scaled_var2, x_scale / n2 / n2 / (n2 - 1)),
+        ):
+            part = self.engine.mult(ctxt, factor)
+            x = part if x is None else self.engine.add(x, part)
+
+        terms = {
+            "delta_sq_scaled": t_numerator_squared,
+            "x": x,
+            "x_scale": x_scale,
+            "R": R,
+            "v_max": v_max,
+            "n1": n1,
+            "n2": n2,
+        }
+
+        return t_squared, inv_df, terms
 
     def HE_Welch_decision(
         self,
@@ -405,7 +432,24 @@ class HEHypothesisTesting:
         score_bound=1.0,
         target="t2",
         trace=None,
+        score="ratio",
+        terms=None,
     ):
+
+        # score="ratio"   : s = T^2 - c^2, normalized by the given score_bound.
+        # score="product" : s' = (mean1 - mean2)^2 - c^2 V (equivalent for
+        #                   V > 0), normalized by the public bound computed
+        #                   from R and v_max (terms from HE_Welch_statistics
+        #                   with return_terms=True); score_bound is ignored.
+        #                   The score has no division by V, but 1/df still
+        #                   uses invSqrt (V inside the invSqrt domain).
+        if score == "product":
+            return self._welch_product_decision(
+                inv_df, terms, alpha, critical_log_degree, target, trace,
+            )
+
+        if score != "ratio":
+            raise ValueError(f"Unsupported score: {score}")
 
         if not np.isfinite(score_bound) or score_bound <= 0.0:
             raise ValueError("score_bound must be a finite positive public bound")
@@ -465,6 +509,113 @@ class HEHypothesisTesting:
 
         return step
 
+    def welch_product_bound(
+        self,
+        R: float,
+        v_max: float,
+        alpha: float,
+        n1: int,
+        n2: int,
+        critical_log_degree=4,
+        target="t2",
+    ):
+
+        # Public bound of |s'| with s' = (mean1 - mean2)^2 - c^2 V:
+        # 0 <= (mean1 - mean2)^2 <= R^2, 0 <= V <= v_max, c^2 <= c_max^2.
+        # The Welch-Satterthwaite df is at least min(n1, n2) - 1, so c_max is
+        # the critical-value polynomial at u = 1 / (min(n1, n2) - 1).
+        # A 1% margin keeps |s' / B| < 1 (the sign approximation is not
+        # valid at exactly |x| = 1).
+        degree = 2 ** critical_log_degree - 1
+        table = _T_CRITICAL_COEFFS if target == "t" else _T_CRITICAL_SQ_COEFFS
+
+        u = 1.0 / (min(n1, n2) - 1)
+        z = 2.0 * (u - _T_CRITICAL_U_MIN) / (_T_CRITICAL_U_MAX - _T_CRITICAL_U_MIN) - 1.0
+        c_max = float(np.polynomial.chebyshev.chebval(z, table[degree][alpha]))
+        c_max_sq = c_max ** 2 if target == "t" else c_max
+
+        return 1.01 * max(R ** 2, c_max_sq * v_max)
+
+    def welch_product_score(
+        self,
+        inv_df: Ciphertext,
+        terms,
+        alpha,
+        critical_log_degree=4,
+        target="t2",
+        trace=None,
+    ):
+
+        # Returns s' / bound (encrypted) with s' = (mean1 - mean2)^2 - c^2 V.
+        if terms is None:
+            raise ValueError("score='product' requires terms from HE_Welch_statistics")
+
+        bound = self.welch_product_bound(
+            terms["R"], terms["v_max"], alpha, terms["n1"], terms["n2"],
+            critical_log_degree, target,
+        )
+
+        if trace is not None:
+            trace["score_bound"] = bound
+
+        # Everything is in x_scale units: s' x_scale = delta_sq_scaled - c^2 x,
+        # normalized by bound * x_scale. The normalization is folded into
+        # the critical-value coefficients (1/sqrt for target "t").
+        norm = bound * terms["x_scale"]
+        critical_scale = 1.0 / np.sqrt(norm) if target == "t" else 1.0 / norm
+
+        critical_scaled = self._critical_value_from_inv_df(
+            inv_df,
+            alpha,
+            critical_log_degree,
+            target,
+            critical_scale,
+        )
+        self._trace(trace, "critical_scaled", critical_scaled)
+
+        if target == "t":
+            critical_squared_scaled = self.engine.mult(
+                critical_scaled,
+                critical_scaled,
+            )
+        else:
+            critical_squared_scaled = critical_scaled
+
+        # s' / bound = delta_sq / bound - (c^2 / bound) V.
+        delta_sq_scaled = self.engine.mult(
+            terms["delta_sq_scaled"],
+            1.0 / norm,
+        )
+        cv = self.engine.mult(critical_squared_scaled, terms["x"])
+        normalized_score = self.engine.sub(delta_sq_scaled, cv)
+        self._trace(trace, "score_normalized", normalized_score)
+
+        return normalized_score
+
+    def _welch_product_decision(
+        self,
+        inv_df: Ciphertext,
+        terms,
+        alpha,
+        critical_log_degree,
+        target,
+        trace,
+    ):
+
+        normalized_score = self.welch_product_score(
+            inv_df, terms, alpha, critical_log_degree, target, trace,
+        )
+
+        # Approximate the sign of the decision score.
+        sign_score = self.approx.sign(normalized_score)
+        self._trace(trace, "sign", sign_score)
+
+        # Map the sign output {-1, +1} to {0, 1}.
+        step = self.engine.add(sign_score, 1.0)
+        step = self.engine.mult(step, 0.5)
+
+        return step
+
     def HE_Welch_T_Test(
         self,
         x1: Ciphertext,
@@ -477,11 +628,14 @@ class HEHypothesisTesting:
         score_bound=1.0,
         target="t2",
         trace=None,
+        score="ratio",
     ):
 
-        t_squared, inv_df = self.HE_Welch_statistics(
-            x1, x2, n1, n2, R, trace,
+        out = self.HE_Welch_statistics(
+            x1, x2, n1, n2, R, trace, return_terms=(score == "product"),
         )
+        t_squared, inv_df = out[0], out[1]
+        terms = out[2] if score == "product" else None
 
         return self.HE_Welch_decision(
             t_squared,
@@ -491,6 +645,8 @@ class HEHypothesisTesting:
             score_bound,
             target,
             trace,
+            score,
+            terms,
         )
 
     # ------------------------------------------------------------------
@@ -560,6 +716,101 @@ class HEHypothesisTesting:
         self._trace(trace, "variance1_scaled", variance1_scaled)
 
         return variance1_scaled, inv_x
+
+    def HE_F_terms(
+        self,
+        x1: Ciphertext,
+        x2: Ciphertext,
+        n1: int,
+        n2: int,
+        R: float,
+    ):
+
+        # Terms of the product score (HE_F_product_decision); no invSqrt.
+        if n1 <= 1 or n2 <= 1:
+            raise ValueError("F-test requires n1 > 1 and n2 > 1")
+
+        if not np.isfinite(R) or R <= 0.0:
+            raise ValueError("R must be a finite positive public bound")
+
+        return {
+            # scaled_var_i = n_i * (n_i - 1) * s_i^2.
+            "scaled_var1": self._HE_var_scaled(x1, n1),
+            "scaled_var2": self._HE_var_scaled(x2, n2),
+            "n1": n1,
+            "n2": n2,
+            "R": R,
+        }
+
+    @staticmethod
+    def f_product_bounds(
+        n1: int,
+        n2: int,
+        R: float,
+        lower_critical: float,
+        upper_critical: float,
+    ):
+
+        # For x in [0, R]: s1^2 <= A, s2^2 <= B_v (public). Then
+        # |s1^2 - F_L s2^2| <= max(A, F_L B_v), |s1^2 - F_U s2^2| <= max(A, F_U B_v).
+        var1_max = n1 / (n1 - 1) * R ** 2 / 4.0
+        var2_max = n2 / (n2 - 1) * R ** 2 / 4.0
+
+        return (
+            max(var1_max, lower_critical * var2_max),
+            max(var1_max, upper_critical * var2_max),
+        )
+
+    def HE_F_product_decision(
+        self,
+        terms,
+        lower_critical: float,
+        upper_critical: float,
+        trace=None,
+    ):
+
+        # s'' = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2) = s2^4 (F - F_L)(F - F_U),
+        # which has the same sign for s2^2 > 0 and the public bound
+        # B_F = max(A, F_L B_v) * max(A, F_U B_v). Each factor is normalized
+        # by its own bound (folded into the constants; a 1% margin keeps
+        # |s'' / B_F| < 1).
+        if (
+            not np.isfinite(lower_critical)
+            or not np.isfinite(upper_critical)
+            or lower_critical <= 0.0
+            or upper_critical <= lower_critical
+        ):
+            raise ValueError("Invalid public F critical values")
+
+        n1, n2 = terms["n1"], terms["n2"]
+        m_lower, m_upper = self.f_product_bounds(
+            n1, n2, terms["R"], lower_critical, upper_critical,
+        )
+        margin = np.sqrt(1.01)
+
+        if trace is not None:
+            trace["score_bound"] = 1.01 * m_lower * m_upper
+
+        def factor(critical, m):
+            # (s1^2 - critical * s2^2) / (margin * m)
+            a = self.engine.mult(terms["scaled_var1"], 1.0 / (n1 * (n1 - 1) * margin * m))
+            b = self.engine.mult(terms["scaled_var2"], critical / (n2 * (n2 - 1) * margin * m))
+            return self.engine.sub(a, b)
+
+        normalized_score = self.engine.mult(
+            factor(lower_critical, m_lower),
+            factor(upper_critical, m_upper),
+        )
+        self._trace(trace, "score_normalized", normalized_score)
+
+        sign_score = self.approx.sign(normalized_score)
+        self._trace(trace, "sign", sign_score)
+
+        # Map {-1, +1} to {0, 1}.
+        step = self.engine.add(sign_score, 1.0)
+        step = self.engine.mult(step, 0.5)
+
+        return step
 
     def HE_F_decision(
         self,
@@ -631,7 +882,24 @@ class HEHypothesisTesting:
         upper_critical=None,
         score_bound=None,
         trace=None,
+        score="ratio",
     ):
+
+        # score="product": decision from s'' (no invSqrt, public bound);
+        # score_bound is ignored.
+        if score == "product":
+            if lower_critical is None or upper_critical is None:
+                raise ValueError("score='product' requires lower_critical and upper_critical")
+
+            return self.HE_F_product_decision(
+                self.HE_F_terms(x1, x2, n1, n2, R),
+                lower_critical,
+                upper_critical,
+                trace,
+            )
+
+        if score != "ratio":
+            raise ValueError(f"Unsupported score: {score}")
 
         decision_args = (
             lower_critical,
@@ -741,6 +1009,23 @@ class HEHypothesisTesting:
         self._trace(trace, "z", z)
 
         return z
+
+    @staticmethod
+    def z_public_bound(
+        R: float,
+        sigma1_sq: float,
+        sigma2_sq: float,
+        n1: int,
+        n2: int,
+        alpha: float,
+    ):
+
+        # |mean1 - mean2| <= R, so Z^2 <= R^2 / V_public and
+        # |Z^2 - z^2| <= max(R^2 / V_public, z^2) (1% margin).
+        v_public = sigma1_sq / n1 + sigma2_sq / n2
+        critical_value = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+
+        return 1.01 * max(R ** 2 / v_public, critical_value ** 2)
 
     def HE_Z_decision(
         self,

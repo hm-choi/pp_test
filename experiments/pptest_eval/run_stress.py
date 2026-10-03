@@ -14,8 +14,11 @@ invSqrt configurations: normalized_vmin{1e-3,1e-4,1e-5} (HE-DAP u1 per level)
 and raw_default (degree 63, 7 iterations). A raw HE-DAP table exists only for
 the dataset domains, so it is not used for these synthetic groups.
 
+With --score product (product-score comparison, results/product/) the score is
+s' = (mean1 - mean2)^2 - c^2 V with the public bound max(R^2, c_max^2 V_max).
+
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/pptest_eval/run_stress.py
+    python3 experiments/pptest_eval/run_stress.py [--score product]
 """
 
 import argparse
@@ -54,6 +57,7 @@ RAW_FIELDS = [
     "plain_critical", "he_critical", "critical_abs_err",
     "plain_score", "he_score", "score_abs_err", "score_level",
     "he_step", "plain_decision", "score_decision", "step_decision",
+    "score_bound",
 ]
 
 
@@ -69,7 +73,7 @@ def groups(margin):
     return 10.0 + noise + mean_gap / 2.0, 10.0 + noise - mean_gap / 2.0
 
 
-def plain_values(x1, x2):
+def plain_values(x1, x2, score="ratio"):
 
     n1, n2 = len(x1), len(x2)
     a1, a2 = np.var(x1, ddof=1) / n1, np.var(x2, ddof=1) / n2
@@ -78,7 +82,10 @@ def plain_values(x1, x2):
     df = v ** 2 / (a1 ** 2 / (n1 - 1) + a2 ** 2 / (n2 - 1))
     crit = stats.t.ppf(1.0 - ALPHA / 2.0, df)
 
-    return t2, 1.0 / df, crit, t2 - crit ** 2
+    # score="product": s' = (mean1 - mean2)^2 - c^2 V = V (T^2 - c^2).
+    s = t2 - crit ** 2 if score == "ratio" else (t2 - crit ** 2) * v
+
+    return t2, 1.0 / df, crit, s
 
 
 def configs():
@@ -93,8 +100,14 @@ def main():
     parser.add_argument("--reps", type=int, default=REPS)
     parser.add_argument("--configs", default="all")
     parser.add_argument("--margins", default="all")
-    parser.add_argument("--out-dir", type=Path, default=RESULT_DIR)
+    parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--score", choices=["ratio", "product"], default="ratio",
+                        help="ratio: T^2 - c^2 with bound 0.05 (results/); "
+                             "product: (mean1 - mean2)^2 - c^2 V with the public bound (results/product/)")
     args = parser.parse_args()
+
+    if args.out_dir is None:
+        args.out_dir = RESULT_DIR if args.score == "ratio" else RESULT_DIR / "product"
 
     from engine.HEengine import HEengine
     from engine.HEdata import Message
@@ -129,9 +142,9 @@ def main():
         x1, x2 = groups(margin)
         n1, n2 = len(x1), len(x2)
         R = float(max(np.max(x1), np.max(x2)))
-        p_t2, p_inv_df, p_crit, p_score = plain_values(x1, x2)
+        p_t2, p_inv_df, p_crit, p_score = plain_values(x1, x2, args.score)
 
-        if abs(p_score) >= SCORE_BOUND:
+        if args.score == "ratio" and abs(p_score) >= SCORE_BOUND:
             raise ValueError("Stress score exceeds SCORE_BOUND")
 
         for config_name, cfg in cfgs.items():
@@ -145,13 +158,21 @@ def main():
                 c2 = engine.enc(Message(x2, engine.log_slots))
                 tr = {}
 
-                (t2, inv_df), st, sb = timed(ht, lambda: ht.HE_Welch_statistics(c1, c2, n1, n2, R, tr))
+                out, st, sb = timed(ht, lambda: ht.HE_Welch_statistics(
+                    c1, c2, n1, n2, R, tr, return_terms=(args.score == "product")))
+                t2, inv_df = out[0], out[1]
+                terms = out[2] if args.score == "product" else None
 
                 branches = []
 
                 for ld in LOG_DEGREES:
                     for target in TARGETS:
                         # Critical value + score only (no sign).
+                        def branch_product():
+                            btr = {}
+                            score = ht.welch_product_score(inv_df, terms, ALPHA, ld, target, btr)
+                            return btr["critical_scaled"], score, btr["score_bound"]
+
                         def branch():
                             scale = 1.0 / math.sqrt(SCORE_BOUND) if target == "t" else 1.0 / SCORE_BOUND
                             crit = ht._critical_value_from_inv_df(inv_df, ALPHA, ld, target, scale)
@@ -159,24 +180,32 @@ def main():
                             score = engine.sub(engine.mult(t2, 1.0 / SCORE_BOUND), crit_sq)
                             return crit, score
 
-                        (crit, score), bt, bb = timed(ht, branch)
-                        branches.append((2 ** ld - 1, target, 0, crit, score, None, bt, bb))
+                        if args.score == "ratio":
+                            (crit, score), bt, bb = timed(ht, branch)
+                            B = SCORE_BOUND
+                        else:
+                            (crit, score, B), bt, bb = timed(ht, branch_product)
+
+                        branches.append((2 ** ld - 1, target, 0, crit, score, None, bt, bb, B))
 
                 for target in TARGETS:
                     btr = {}
                     step, bt, bb = timed(ht, lambda: ht.HE_Welch_decision(
-                        t2, inv_df, ALPHA, STEP_LOG_DEGREE, SCORE_BOUND, target, btr))
+                        t2, inv_df, ALPHA, STEP_LOG_DEGREE, SCORE_BOUND, target, btr, args.score, terms))
+                    B = SCORE_BOUND if args.score == "ratio" else btr["score_bound"]
                     branches.append((2 ** STEP_LOG_DEGREE - 1, target, 1,
-                                     btr["critical_scaled"], btr["score_normalized"], step, bt, bb))
+                                     btr["critical_scaled"], btr["score_normalized"], step, bt, bb, B))
 
                 he_t2 = first(engine, tr["t_squared"])
                 he_inv_df = first(engine, tr["inv_df"])
                 plain_decision = int(p_score > 0.0)
 
-                for degree, target, full, crit, score, step, bt, bb in branches:
+                for degree, target, full, crit, score, step, bt, bb, B in branches:
+                    # Critical scale: B (ratio) or B * x_scale (product).
+                    norm = B if args.score == "ratio" else B * terms["x_scale"]
                     cs = first(engine, crit)
-                    he_crit = cs * math.sqrt(SCORE_BOUND) if target == "t" else math.sqrt(max(cs * SCORE_BOUND, 0.0))
-                    he_score = first(engine, score) * SCORE_BOUND
+                    he_crit = cs * math.sqrt(norm) if target == "t" else math.sqrt(max(cs * norm, 0.0))
+                    he_score = first(engine, score) * B
                     he_step = first(engine, step) if step is not None else ""
 
                     writer.writerow({
@@ -187,6 +216,7 @@ def main():
                         "plain_inv_df": p_inv_df, "he_inv_df": he_inv_df, "inv_df_abs_err": abs(he_inv_df - p_inv_df),
                         "plain_critical": p_crit, "he_critical": he_crit, "critical_abs_err": abs(he_crit - p_crit),
                         "plain_score": p_score, "he_score": he_score, "score_abs_err": abs(he_score - p_score),
+                        "score_bound": B,
                         "score_level": score.level(),
                         "he_step": he_step, "plain_decision": plain_decision,
                         "score_decision": int(he_score > 0.0),
