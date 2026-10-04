@@ -1,4 +1,4 @@
-"""Section 4.4: critical-boundary approximation (ApproxTCrit).
+"""Critical-boundary approximation (ApproxTCrit).
 
 Plaintext part (--part plain):
     Chebyshev approximation of the two-sided t critical value t_{1-alpha/2, df}

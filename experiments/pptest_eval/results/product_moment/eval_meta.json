@@ -1,0 +1,65 @@
+{
+  "insurance_charges_smoker/welch": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 274,
+    "n2": 1064,
+    "R": 63.77042801
+  },
+  "insurance_charges_smoker/f": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 274,
+    "n2": 1064,
+    "R": 63.77042801
+  },
+  "insurance_charges_smoker/z": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 274,
+    "n2": 1064,
+    "R": 63.77042801
+  },
+  "adult_edu_income/welch": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 16.0
+  },
+  "adult_edu_income/f": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 16.0
+  },
+  "adult_edu_income/z": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 16.0
+  },
+  "adult_age_gender/welch": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 90.0
+  },
+  "adult_age_gender/f": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 90.0
+  },
+  "adult_age_gender/z": {
+    "variance": "moment",
+    "score": "product",
+    "n1": 1024,
+    "n2": 1024,
+    "R": 90.0
+  }
+}

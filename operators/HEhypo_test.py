@@ -39,11 +39,21 @@ class HEHypothesisTesting:
         self,
         engine: HEengine,
         invsqrt=None,
+        variance="scaled",
     ):
+
+        # variance="scaled": n(n-1) s^2 = n sum(x^2) - (sum x)^2, then tiny
+        #                    constants such as 1/(n^2 (n-1)) (split into
+        #                    several factors by HEengine.mult).
+        # variance="moment": sum(x^2)/n - (sum(x)/n)^2 (population variance),
+        #                    so every constant is of order 1/n.
+        if variance not in ("scaled", "moment"):
+            raise ValueError(f"Unsupported variance mode: {variance}")
 
         self.engine = engine
         self.approx = HEApprox(engine)
         self.invsqrt = {**DEFAULT_INVSQRT, **(invsqrt or {})}
+        self.variance = variance
         self._bootstrap_count = 0
 
     def bootstrap_count(
@@ -162,14 +172,32 @@ class HEHypothesisTesting:
         #
         # which is equal to
         #
-        # n * (n - 1) * sample_variance.
+        # n * (n - 1) * sample_variance  (variance="scaled"), or the
+        # population variance sum(x^2)/n - (sum(x)/n)^2 (variance="moment").
+        # In both cases sample_variance = _var_unit(n) * result.
         s = self.engine.sum(x)
         q = self.engine.sum(self.engine.mult(x, x))
+
+        if self.variance == "moment":
+            mean = self.engine.mult(s, 1.0 / n)
+            mean_sq = self.engine.mult(q, 1.0 / n)
+            return self.engine.sub(mean_sq, self.engine.mult(mean, mean))
 
         nq = self.engine.mult(q, n)
         s_squared = self.engine.mult(s, s)
 
         return self.engine.sub(nq, s_squared)
+
+    def _var_unit(
+        self,
+        n: int,
+    ):
+
+        # sample_variance = _var_unit(n) * _HE_var_scaled(x, n).
+        if self.variance == "moment":
+            return n / (n - 1)
+
+        return 1.0 / (n * (n - 1))
 
     def _inv_sqrt_from_terms(
         self,
@@ -305,8 +333,8 @@ class HEHypothesisTesting:
         # at level >= 3 before the Chebyshev evaluation).
         inv_sqrt_x, x_scale = self._inv_sqrt_from_terms(
             [
-                (scaled_var1, 1.0 / n1 / n1 / (n1 - 1)),
-                (scaled_var2, 1.0 / n2 / n2 / (n2 - 1)),
+                (scaled_var1, self._var_unit(n1) / n1),
+                (scaled_var2, self._var_unit(n2) / n2),
             ],
             v_max,
             7,
@@ -342,8 +370,8 @@ class HEHypothesisTesting:
         # a_i / sqrt(n_i - 1).
         #
         # x_scale is also folded in (D * x_scale^2 / x^2 = D / V^2).
-        scale1_for_df = x_scale / (n1 ** 2 * (n1 - 1) ** 1.5)
-        scale2_for_df = x_scale / (n2 ** 2 * (n2 - 1) ** 1.5)
+        scale1_for_df = x_scale * self._var_unit(n1) / (n1 * (n1 - 1) ** 0.5)
+        scale2_for_df = x_scale * self._var_unit(n2) / (n2 * (n2 - 1) ** 0.5)
 
         d1_base = self.engine.mult(scaled_var1, scale1_for_df)
         d2_base = self.engine.mult(scaled_var2, scale2_for_df)
@@ -405,8 +433,8 @@ class HEHypothesisTesting:
         x = None
 
         for ctxt, factor in (
-            (scaled_var1, x_scale / n1 / n1 / (n1 - 1)),
-            (scaled_var2, x_scale / n2 / n2 / (n2 - 1)),
+            (scaled_var1, x_scale * self._var_unit(n1) / n1),
+            (scaled_var2, x_scale * self._var_unit(n2) / n2),
         ):
             part = self.engine.mult(ctxt, factor)
             x = part if x is None else self.engine.add(x, part)
@@ -693,7 +721,7 @@ class HEHypothesisTesting:
         # needed for 1/x, F, the decision score and its normalization
         # (sign bootstraps at level >= 3).
         inv_sqrt_x, x_scale = self._inv_sqrt_from_terms(
-            [(scaled_var2, 1.0 / n2 / (n2 - 1))],
+            [(scaled_var2, self._var_unit(n2))],
             var2_max,
             7,
         )
@@ -711,7 +739,7 @@ class HEHypothesisTesting:
         # variance1 * x_scale, so that (variance1 * x_scale) / x = F.
         variance1_scaled = self.engine.mult(
             scaled_var1,
-            x_scale / n1 / (n1 - 1),
+            x_scale * self._var_unit(n1),
         )
         self._trace(trace, "variance1_scaled", variance1_scaled)
 
@@ -793,8 +821,8 @@ class HEHypothesisTesting:
 
         def factor(critical, m):
             # (s1^2 - critical * s2^2) / (margin * m)
-            a = self.engine.mult(terms["scaled_var1"], 1.0 / (n1 * (n1 - 1) * margin * m))
-            b = self.engine.mult(terms["scaled_var2"], critical / (n2 * (n2 - 1) * margin * m))
+            a = self.engine.mult(terms["scaled_var1"], self._var_unit(n1) / (margin * m))
+            b = self.engine.mult(terms["scaled_var2"], critical * self._var_unit(n2) / (margin * m))
             return self.engine.sub(a, b)
 
         normalized_score = self.engine.mult(

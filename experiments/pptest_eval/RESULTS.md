@@ -1,4 +1,4 @@
-# Sections 4.3 / 4.6: encrypted hypothesis tests
+# Encrypted hypothesis tests: accuracy and performance
 
 HEaaN FGb CPU. Cases (`experiments/pptest_cases.py`): Insurance charges/1000 by smoker (274 vs 1064), Adult educational-num by income
 and Adult age by gender (first 1024 per group). Two-sided alpha in {0.01, 0.025, 0.05, 0.1}; Welch critical value from the degree-15
@@ -52,7 +52,7 @@ Max statistic relative error 7.8e-07, max p-value error 2.2e-07.
 
 All alphas and both Welch targets: `results/eval_summary.csv`; per repetition: `results/eval_raw.csv`.
 
-## Section 4.5: boundary stress test (`run_stress.py`)
+## Boundary stress test (`run_stress.py`)
 
 Design of `experiments/experiment1/test3.py`: two synthetic groups of 128 samples, Welch t = (t_crit + margin) * SE,
 margins +-0.001, +-0.002, +-0.005, +-0.01, alpha = 0.05, score bound 0.05. Critical value + score for degrees 7..127 and both targets;
@@ -98,7 +98,7 @@ alpha = 0.05, Welch target t^2, normalized v_min = 1e-3 (F product: no_invsqrt):
 | adult_age_gender | f | 24.4 +- 1.0 | 10.8 +- 0.5 | 8 -> 4 | 2.6e-01 | 5.4e-05 | 2.9e-10 |
 | adult_age_gender | z | 10.4 +- 0.5 | 10.5 +- 0.6 | 4 -> 4 | 3.8e-01 | 3.5e-04 | 6.9e-12 |
 
-Stress test (section 4.5 design), product score with the public bound:
+Stress test (same design), product score with the public bound:
 
 | score | results | score sign match | step match (degree 15) | min \|s/B\| (margin +-0.001) | max HE err / B |
 |---|---|---|---|---|---|
@@ -111,3 +111,52 @@ Notes:
 - Welch: same time and bootstraps as ratio; the score no longer divides by V, but 1/df still uses invSqrt (V inside the invSqrt domain).
 - F: invSqrt leaves the decision path: about 10-11 s instead of 21-24 s, 4 bootstraps instead of 7-8.
 - Degree-7 t^2 critical values have HE error close to the stress margin (margin / error >= 1.7) in both modes; degree 15 is used by default.
+
+## Variance computation: scaled vs moment (`--variance moment`, `results/ratio_moment/`, `results/product_moment/`)
+
+- scaled: n sum(x^2) - (sum x)^2 = n(n-1) s^2, then constants such as 1/(n^2 (n-1)) (below 1e-8, split into 2-3 factors by HEengine.mult).
+- moment: sum(x^2)/n - (sum(x)/n)^2 (constants of order 1/n, no splitting).
+
+Same cases, alphas, targets, configurations and 10 repetitions. All decisions match SciPy in both modes.
+
+| score | test | mean time scaled (s) | mean time moment (s) | max stat rel. err scaled / moment |
+|---|---|---|---|---|
+| ratio | welch | 25.9 | 24.1 | 7.8e-07 / 7.4e-07 |
+| ratio | f | 25.9 | 23.6 | 2.7e-07 / 1.2e-07 |
+| ratio | z | 10.3 | 9.7 | 6.3e-09 / 9.6e-09 |
+| product | welch | 26.2 | 22.8 | 7.4e-07 / 7.5e-07 |
+| product | f | 10.7 | 10.2 | nan / nan |
+| product | z | 10.2 | 9.8 | 6.8e-09 / 6.5e-09 |
+
+Per configuration (alpha = 0.05, Welch target t^2, product score):
+
+| case | test | invSqrt | scaled time (s) / BTS | moment time (s) / BTS |
+|---|---|---|---|---|
+| insurance_charges_smoker | welch | normalized_vmin0.001 | 25.6 / 8 | 20.7 +- 0.7 / 7 |
+| insurance_charges_smoker | welch | normalized_vmin0.0001 | 24.0 / 8 | 20.5 +- 0.9 / 7 |
+| insurance_charges_smoker | welch | normalized_vmin1e-05 | 24.6 / 8 | 24.5 +- 1.4 / 8 |
+| insurance_charges_smoker | welch | raw_default | 33.4 / 10 | 28.9 +- 1.7 / 9 |
+| insurance_charges_smoker | welch | raw_hedap | 23.2 / 8 | 23.0 +- 1.2 / 8 |
+| insurance_charges_smoker | f | no_invsqrt | 10.8 / 4 | 11.0 +- 0.7 / 4 |
+| insurance_charges_smoker | z | public_variance | 10.4 / 4 | 10.5 +- 0.7 / 4 |
+| adult_edu_income | welch | normalized_vmin0.001 | 25.8 / 8 | 19.6 +- 0.9 / 7 |
+| adult_edu_income | welch | normalized_vmin0.0001 | 24.5 / 8 | 20.3 +- 0.9 / 7 |
+| adult_edu_income | welch | normalized_vmin1e-05 | 29.1 / 9 | 25.9 +- 1.4 / 8 |
+| adult_edu_income | welch | raw_default | 33.2 / 10 | 28.8 +- 1.7 / 9 |
+| adult_edu_income | welch | raw_hedap | 19.8 / 7 | 20.0 +- 1.1 / 7 |
+| adult_edu_income | f | no_invsqrt | 10.0 / 4 | 9.9 +- 0.1 / 4 |
+| adult_edu_income | z | public_variance | 9.6 / 4 | 9.4 +- 0.2 / 4 |
+| adult_age_gender | welch | normalized_vmin0.001 | 25.4 / 8 | 19.5 +- 0.5 / 7 |
+| adult_age_gender | welch | normalized_vmin0.0001 | 23.7 / 8 | 20.2 +- 0.4 / 7 |
+| adult_age_gender | welch | normalized_vmin1e-05 | 24.8 / 8 | 24.1 +- 0.3 / 8 |
+| adult_age_gender | welch | raw_default | 33.3 / 10 | 28.0 +- 0.4 / 9 |
+| adult_age_gender | welch | raw_hedap | 23.1 / 8 | 20.0 +- 0.5 / 7 |
+| adult_age_gender | f | no_invsqrt | 10.8 / 4 | 9.8 +- 0.1 / 4 |
+| adult_age_gender | z | public_variance | 10.5 / 4 | 9.4 +- 0.1 / 4 |
+
+Stress test: 3840/3840 results match in all four runs (ratio/product x scaled/moment).
+
+Notes: Welch product with v_min = 1e-3 or 1e-4 drops one bootstrap (8 -> 7, ~25 s -> ~20 s) because the invSqrt input
+arrives one level higher and the final extended bootstrap is no longer needed; v_min = 1e-5 (ratio) can need one more bootstrap
+(8 -> 9) since HE-DAP selects a different configuration at the new input level. F product has no variance constants in a
+critical position and is unchanged.

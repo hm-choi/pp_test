@@ -1,4 +1,4 @@
-"""Section 4.5: boundary-sensitive decision (stress) test for Welch's t-test.
+"""Boundary-sensitive decision (stress) test for Welch's t-test.
 
 Follows experiments/experiment1/test3.py: two synthetic groups of 128 samples
 (10 + 5 * linspace(-1, 1, 128), shifted by +/- mean_gap / 2) whose Welch
@@ -101,6 +101,9 @@ def main():
     parser.add_argument("--configs", default="all")
     parser.add_argument("--margins", default="all")
     parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--variance", choices=["scaled", "moment"], default="scaled",
+                        help="variance computation (HEHypothesisTesting variance=...); "
+                             "moment results go to <score dir>_moment/")
     parser.add_argument("--score", choices=["ratio", "product"], default="ratio",
                         help="ratio: T^2 - c^2 with bound 0.05 (results/); "
                              "product: (mean1 - mean2)^2 - c^2 V with the public bound (results/product/)")
@@ -108,6 +111,9 @@ def main():
 
     if args.out_dir is None:
         args.out_dir = RESULT_DIR if args.score == "ratio" else RESULT_DIR / "product"
+
+        if args.variance == "moment":
+            args.out_dir = RESULT_DIR / ("ratio_moment" if args.score == "ratio" else "product_moment")
 
     from engine.HEengine import HEengine
     from engine.HEdata import Message
@@ -148,7 +154,7 @@ def main():
             raise ValueError("Stress score exceeds SCORE_BOUND")
 
         for config_name, cfg in cfgs.items():
-            ht = HEHypothesisTesting(engine, cfg)
+            ht = HEHypothesisTesting(engine, cfg, variance=args.variance)
 
             for rep in range(args.reps):
                 if (str(margin), config_name, str(rep)) in done:

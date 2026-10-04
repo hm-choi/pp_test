@@ -1,4 +1,4 @@
-"""Sections 4.3 / 4.6: accuracy and performance of encrypted hypothesis tests.
+"""Accuracy and performance of encrypted hypothesis tests.
 
 For every dataset case (experiments/pptest_cases.py), test (Welch, F, Z),
 invSqrt configuration (Welch and F) and repetition, the encrypted statistics
@@ -446,6 +446,9 @@ def main():
     parser.add_argument("--configs", default="all")
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--summary-only", action="store_true")
+    parser.add_argument("--variance", choices=["scaled", "moment"], default="scaled",
+                        help="variance computation (HEHypothesisTesting variance=...); "
+                             "moment results go to <score dir>_moment/")
     parser.add_argument("--score", choices=["ratio", "product"], default="ratio",
                         help="ratio: T^2 - c^2 (data-chosen bound, results/); "
                              "product: multiplied-out scores with public bounds (results/product/)")
@@ -453,6 +456,9 @@ def main():
 
     if args.out_dir is None:
         args.out_dir = RESULT_DIR if args.score == "ratio" else RESULT_DIR / "product"
+
+        if args.variance == "moment":
+            args.out_dir = RESULT_DIR / ("ratio_moment" if args.score == "ratio" else "product_moment")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     raw_path = args.out_dir / "eval_raw.csv"
@@ -506,12 +512,12 @@ def main():
                     # Valid sign input range: 1.5e-7 < |score / B| < 1.
                     ratios = [abs(plain[test][a]["score"]) / bound for a in ALPHAS]
                     assert 1e-5 < min(ratios) and max(ratios) < 1.0, (case_name, test, ratios)
-                    meta[f"{case_name}/{test}"] = {"score_bound": bound, "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
+                    meta[f"{case_name}/{test}"] = {"variance": args.variance, "score_bound": bound, "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
                 else:
                     # Public bounds (Z: max(R^2 / V_public, z^2); Welch / F: computed in the decision).
                     bounds = {a: HEHypothesisTesting.z_public_bound(case["R"], s1, s2, case["n1"], case["n2"], a)
                               for a in ALPHAS}
-                    meta[f"{case_name}/{test}"] = {"score": "product", "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
+                    meta[f"{case_name}/{test}"] = {"variance": args.variance, "score": "product", "n1": case["n1"], "n2": case["n2"], "R": case["R"]}
 
                 if test == "z":
                     configs = {"public_variance": None}
@@ -522,7 +528,7 @@ def main():
                     configs = {name: invsqrt_config(name, case_name, test) for name in names}
 
                 for config_name, cfg in configs.items():
-                    ht = HEHypothesisTesting(engine, cfg)
+                    ht = HEHypothesisTesting(engine, cfg, variance=args.variance)
 
                     for rep in range(args.reps):
                         if (case_name, test, config_name, str(rep)) in done:

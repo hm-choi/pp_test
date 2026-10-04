@@ -1,4 +1,4 @@
-# Section 4.4: critical-value approximation (ApproxTCrit)
+# Critical-value approximation (ApproxTCrit)
 
 Exact reference: SciPy `t.ppf` (two-sided). df in [1, 2000] (dense log grid + all integers). Coefficients:
 `coeffs/t_critical_coeffs.py` (generated in `coeffs/approx.ipynb`, section 4-1) on 1/df in [1/2000, 1].
