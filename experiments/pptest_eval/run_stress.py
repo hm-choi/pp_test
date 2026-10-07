@@ -3,29 +3,24 @@
 Follows experiments/experiment1/test3.py: two synthetic groups of 128 samples
 (10 + 5 * linspace(-1, 1, 128), shifted by +/- mean_gap / 2) whose Welch
 t statistic is (t_crit + margin) * SE for margins in MARGINS around the
-two-sided critical value at alpha = 0.05, with the public score bound 0.05.
+two-sided critical value at alpha = 0.05.
 
-For every margin, invSqrt configuration and repetition, the encrypted
-statistics are computed once; then for every critical-value degree 2^3-1 ..
-2^7-1 and target (t, t^2) the encrypted score is computed (critical value +
-score only), and for degree 15 the full decision (sign / step) is evaluated.
+For every margin and repetition, the encrypted statistics are computed once;
+then for every critical-value degree 2^3-1 .. 2^7-1 the encrypted score
+s = (mean1 - mean2)^2 - c^2 V (public bound max(R^2, c_max^2 V_max)) is
+computed, and for degree 15 the full decision (sign / step) is evaluated.
 
-invSqrt configurations: normalized_vmin{1e-3,1e-4,1e-5} (HE-DAP u1 per level)
-and raw_default (degree 63, 7 iterations). A raw HE-DAP table exists only for
-the dataset domains, so it is not used for these synthetic groups.
-
-With --score product (product-score comparison, results/product/) the score is
-s' = (mean1 - mean2)^2 - c^2 V with the public bound max(R^2, c_max^2 V_max).
+invSqrt configuration: degree 63, 7 iterations (the HE-DAP tables are built
+for the dataset domains only).
 
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/pptest_eval/run_stress.py [--score product]
+    python3 experiments/pptest_eval/run_stress.py
 """
 
 import argparse
 import csv
 import math
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -42,16 +37,15 @@ from run_eval import invsqrt_config, first, timed
 ALPHA = 0.05
 MARGINS = (-0.01, -0.005, -0.002, -0.001, 0.001, 0.002, 0.005, 0.01)
 GROUP_SIZE = 128
-SCORE_BOUND = 0.05
 LOG_DEGREES = range(3, 8)
-TARGETS = ["t", "t2"]
 STEP_LOG_DEGREE = 4
 REPS = 10
+CONFIGS = ["default"]
 
 RESULT_DIR = Path(__file__).resolve().parent / "results"
 
 RAW_FIELDS = [
-    "margin", "config", "rep", "degree", "target", "full_decision",
+    "margin", "config", "rep", "degree", "full_decision",
     "stats_time", "branch_time", "stats_bootstraps", "branch_bootstraps",
     "plain_t2", "he_t2", "t2_abs_err", "plain_inv_df", "he_inv_df", "inv_df_abs_err",
     "plain_critical", "he_critical", "critical_abs_err",
@@ -73,7 +67,7 @@ def groups(margin):
     return 10.0 + noise + mean_gap / 2.0, 10.0 + noise - mean_gap / 2.0
 
 
-def plain_values(x1, x2, score="ratio"):
+def plain_values(x1, x2):
 
     n1, n2 = len(x1), len(x2)
     a1, a2 = np.var(x1, ddof=1) / n1, np.var(x2, ddof=1) / n2
@@ -82,38 +76,17 @@ def plain_values(x1, x2, score="ratio"):
     df = v ** 2 / (a1 ** 2 / (n1 - 1) + a2 ** 2 / (n2 - 1))
     crit = stats.t.ppf(1.0 - ALPHA / 2.0, df)
 
-    # score="product": s' = (mean1 - mean2)^2 - c^2 V = V (T^2 - c^2).
-    s = t2 - crit ** 2 if score == "ratio" else (t2 - crit ** 2) * v
-
-    return t2, 1.0 / df, crit, s
-
-
-def configs():
-
-    names = ["normalized_vmin0.001", "normalized_vmin0.0001", "normalized_vmin1e-05", "raw_default"]
-    return {name: invsqrt_config(name, None, None) for name in names}
+    # s = (mean1 - mean2)^2 - c^2 V = V (T^2 - c^2).
+    return t2, 1.0 / df, crit, (t2 - crit ** 2) * v
 
 
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reps", type=int, default=REPS)
-    parser.add_argument("--configs", default="all")
     parser.add_argument("--margins", default="all")
-    parser.add_argument("--out-dir", type=Path, default=None)
-    parser.add_argument("--variance", choices=["scaled", "moment"], default="scaled",
-                        help="variance computation (HEHypothesisTesting variance=...); "
-                             "moment results go to <score dir>_moment/")
-    parser.add_argument("--score", choices=["ratio", "product"], default="ratio",
-                        help="ratio: T^2 - c^2 with bound 0.05 (results/); "
-                             "product: (mean1 - mean2)^2 - c^2 V with the public bound (results/product/)")
+    parser.add_argument("--out-dir", type=Path, default=RESULT_DIR)
     args = parser.parse_args()
-
-    if args.out_dir is None:
-        args.out_dir = RESULT_DIR if args.score == "ratio" else RESULT_DIR / "product"
-
-        if args.variance == "moment":
-            args.out_dir = RESULT_DIR / ("ratio_moment" if args.score == "ratio" else "product_moment")
 
     from engine.HEengine import HEengine
     from engine.HEdata import Message
@@ -131,14 +104,11 @@ def main():
             for row in csv.DictReader(file):
                 k = (row["margin"], row["config"], row["rep"])
                 counts[k] = counts.get(k, 0) + 1
-        per_run = len(LOG_DEGREES) * len(TARGETS) + len(TARGETS)
+        per_run = len(LOG_DEGREES) + 1
         done = {k for k, n in counts.items() if n == per_run}
 
     engine = HEengine(device_type="cpu", setting_root="/heaan_setting/")
-    cfgs = configs()
-
-    if args.configs != "all":
-        cfgs = {k: v for k, v in cfgs.items() if k in args.configs.split(",")}
+    cfgs = {name: invsqrt_config(name, None) for name in CONFIGS}
 
     margins = MARGINS if args.margins == "all" else tuple(float(m) for m in args.margins.split(","))
 
@@ -148,13 +118,11 @@ def main():
         x1, x2 = groups(margin)
         n1, n2 = len(x1), len(x2)
         R = float(max(np.max(x1), np.max(x2)))
-        p_t2, p_inv_df, p_crit, p_score = plain_values(x1, x2, args.score)
-
-        if args.score == "ratio" and abs(p_score) >= SCORE_BOUND:
-            raise ValueError("Stress score exceeds SCORE_BOUND")
+        HEHypothesisTesting.check_inv_sqrt_domain(x1, x2, R)
+        p_t2, p_inv_df, p_crit, p_score = plain_values(x1, x2)
 
         for config_name, cfg in cfgs.items():
-            ht = HEHypothesisTesting(engine, cfg, variance=args.variance)
+            ht = HEHypothesisTesting(engine, cfg)
 
             for rep in range(args.reps):
                 if (str(margin), config_name, str(rep)) in done:
@@ -164,59 +132,38 @@ def main():
                 c2 = engine.enc(Message(x2, engine.log_slots))
                 tr = {}
 
-                out, st, sb = timed(ht, lambda: ht.HE_Welch_statistics(
-                    c1, c2, n1, n2, R, tr, return_terms=(args.score == "product")))
-                t2, inv_df = out[0], out[1]
-                terms = out[2] if args.score == "product" else None
+                st_, st, sb = timed(ht, lambda: ht.HE_Welch_statistics(c1, c2, n1, n2, R, tr))
 
                 branches = []
 
                 for ld in LOG_DEGREES:
-                    for target in TARGETS:
-                        # Critical value + score only (no sign).
-                        def branch_product():
-                            btr = {}
-                            score = ht.welch_product_score(inv_df, terms, ALPHA, ld, target, btr)
-                            return btr["critical_scaled"], score, btr["score_bound"]
+                    # Critical value + score only (no sign).
+                    def branch():
+                        btr = {}
+                        score = ht.welch_score(st_, ALPHA, ld, btr)
+                        return btr["critical_scaled"], score, btr["score_bound"]
 
-                        def branch():
-                            scale = 1.0 / math.sqrt(SCORE_BOUND) if target == "t" else 1.0 / SCORE_BOUND
-                            crit = ht._critical_value_from_inv_df(inv_df, ALPHA, ld, target, scale)
-                            crit_sq = engine.mult(crit, crit) if target == "t" else crit
-                            score = engine.sub(engine.mult(t2, 1.0 / SCORE_BOUND), crit_sq)
-                            return crit, score
+                    (crit, score, B), bt, bb = timed(ht, branch)
+                    branches.append((2 ** ld - 1, 0, crit, score, None, bt, bb, B))
 
-                        if args.score == "ratio":
-                            (crit, score), bt, bb = timed(ht, branch)
-                            B = SCORE_BOUND
-                        else:
-                            (crit, score, B), bt, bb = timed(ht, branch_product)
+                btr = {}
+                step, bt, bb = timed(ht, lambda: ht.HE_Welch_decision(st_, ALPHA, STEP_LOG_DEGREE, btr))
+                branches.append((2 ** STEP_LOG_DEGREE - 1, 1,
+                                 btr["critical_scaled"], btr["score_normalized"], step, bt, bb, btr["score_bound"]))
 
-                        branches.append((2 ** ld - 1, target, 0, crit, score, None, bt, bb, B))
-
-                for target in TARGETS:
-                    btr = {}
-                    step, bt, bb = timed(ht, lambda: ht.HE_Welch_decision(
-                        t2, inv_df, ALPHA, STEP_LOG_DEGREE, SCORE_BOUND, target, btr, args.score, terms))
-                    B = SCORE_BOUND if args.score == "ratio" else btr["score_bound"]
-                    branches.append((2 ** STEP_LOG_DEGREE - 1, target, 1,
-                                     btr["critical_scaled"], btr["score_normalized"], step, bt, bb, B))
-
-                he_t2 = first(engine, tr["t_squared"])
+                # Reporting only (not timed).
+                he_t2 = first(engine, ht.HE_Welch_t_squared(st_))
                 he_inv_df = first(engine, tr["inv_df"])
                 plain_decision = int(p_score > 0.0)
 
-                for degree, target, full, crit, score, step, bt, bb, B in branches:
-                    # Critical scale: B (ratio) or B * x_scale (product).
-                    norm = B if args.score == "ratio" else B * terms["x_scale"]
-                    cs = first(engine, crit)
-                    he_crit = cs * math.sqrt(norm) if target == "t" else math.sqrt(max(cs * norm, 0.0))
+                for degree, full, crit, score, step, bt, bb, B in branches:
+                    he_crit = math.sqrt(max(first(engine, crit) * B, 0.0))
                     he_score = first(engine, score) * B
                     he_step = first(engine, step) if step is not None else ""
 
                     writer.writerow({
                         "margin": margin, "config": config_name, "rep": rep, "degree": degree,
-                        "target": target, "full_decision": full,
+                        "full_decision": full,
                         "stats_time": st, "branch_time": bt, "stats_bootstraps": sb, "branch_bootstraps": bb,
                         "plain_t2": p_t2, "he_t2": he_t2, "t2_abs_err": abs(he_t2 - p_t2),
                         "plain_inv_df": p_inv_df, "he_inv_df": he_inv_df, "inv_df_abs_err": abs(he_inv_df - p_inv_df),
@@ -231,9 +178,8 @@ def main():
 
                 file.flush()
 
-                full = [b for b in branches if b[2] == 1]
                 print(f"margin={margin:+.3f} {config_name} rep={rep} stats={st:.1f}s "
-                      f"steps={[round(first(engine, b[5]), 4) for b in full]} plain={plain_decision}", flush=True)
+                      f"step={first(engine, branches[-1][4]):.4f} plain={plain_decision}", flush=True)
 
     file.close()
     print(f"saved {raw_path}")

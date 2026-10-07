@@ -20,7 +20,7 @@ diverging Newton iterations on out-of-domain slots can overflow and corrupt
 every slot.
 
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/invsqrt/measure.py --domains raw
+    python3 experiments/invsqrt/measure.py
 """
 
 import argparse
@@ -50,7 +50,7 @@ from hedap_optimizer import (
 REPS = 10
 
 RAW_FIELDS = [
-    "domain", "method", "lo", "hi", "level", "degree", "pre_bts", "iteration", "tags",
+    "domain", "lo", "hi", "level", "degree", "pre_bts", "iteration", "tags",
     "input", "rep", "time", "bootstrap_count",
     "mre", "max_re", "mre_alg", "max_re_alg",
     "max_re_out", "neg_out",
@@ -70,7 +70,7 @@ def build_configs(optimal, raw, domains):
 
     def add(domain, level, degree, pre_bts, iteration, tag):
         c = {
-            "domain": domain["name"], "method": domain["method"],
+            "domain": domain["name"],
             "lo": domain["lo"], "hi": domain["hi"], "level": level,
             "degree": degree, "pre_bts": pre_bts, "iteration": iteration,
         }
@@ -107,7 +107,7 @@ def run_once(engine, approx, config, x):
     x_dec = decrypt(engine, ctxt, len(x))
 
     # One-off plaintext work (coefficients) outside the timer.
-    approx.inv_sqrt_coeffs(log_degree, dom, config["method"])
+    approx.inv_sqrt_coeffs(log_degree, dom)
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()
@@ -116,10 +116,9 @@ def run_once(engine, approx, config, x):
     y = approx.invSqrt(
         x_half,
         x_cheb,
+        domain=dom,
         log_degree=log_degree,
         iteration=config["iteration"],
-        domain=dom,
-        method=config["method"],
         pre_bts=bool(config["pre_bts"]),
     )
 
@@ -161,11 +160,11 @@ def summarize(raw_path, summary_path):
 
     with raw_path.open() as file:
         for row in csv.DictReader(file):
-            key = tuple(row[k] for k in ("domain", "method", "lo", "hi") + KEY_FIELDS[1:])
+            key = tuple(row[k] for k in ("domain", "lo", "hi") + KEY_FIELDS[1:])
             groups.setdefault(key, {"tags": row["tags"], "lin": [], "geom": [], "ood": []})[row["input"]].append(row)
 
     fields = [
-        "domain", "method", "lo", "hi", "level", "degree", "pre_bts", "iteration", "tags", "reps",
+        "domain", "lo", "hi", "level", "degree", "pre_bts", "iteration", "tags", "reps",
         "time_mean", "time_std", "bootstrap_count",
         "mre", "max_re", "mre_alg", "max_re_alg",
         "geom_mre", "geom_max_re", "geom_max_re_alg", "out_max_re", "out_neg",
@@ -184,7 +183,7 @@ def summarize(raw_path, summary_path):
         ood = g["ood"][0] if g["ood"] else None
 
         rows.append({
-            **dict(zip(fields[:8], key)),
+            **dict(zip(fields[:7], key)),
             "tags": g["tags"],
             "reps": len(lin),
             "time_mean": f("time").mean(),
@@ -214,13 +213,13 @@ def summarize(raw_path, summary_path):
 def main():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--domains", default="raw", help="normalized, raw, all or comma-separated names")
+    parser.add_argument("--domains", default="all", help="all or comma-separated names")
     parser.add_argument("--reps", type=int, default=REPS)
     parser.add_argument("--dir", type=Path, default=None, help="directory of hedap_optimizer.py outputs")
     parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args()
 
-    out_dir = args.dir or RESULT_DIR / args.domains.replace(",", "_")
+    out_dir = args.dir or RESULT_DIR
     raw_path = out_dir / "measure_raw.csv"
     summary_path = out_dir / "measure_summary.csv"
 
@@ -259,7 +258,7 @@ def main():
                 re, re_alg = errors(x, x_dec, y)
 
                 row = {
-                    **{k: config[k] for k in ("domain", "method", "lo", "hi") + KEY_FIELDS[1:]},
+                    **{k: config[k] for k in ("domain", "lo", "hi") + KEY_FIELDS[1:]},
                     "tags": "|".join(config["tags"]),
                     "input": input_name, "rep": rep,
                     "time": elapsed, "bootstrap_count": bts,

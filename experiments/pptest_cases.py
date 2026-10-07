@@ -64,7 +64,6 @@ def load_cases():
             "R": R,
             # Public bounds used by HEHypothesisTesting.
             "welch_v_max": (R ** 2 / 4.0) * (1.0 / (n1 - 1) + 1.0 / (n2 - 1)),
-            "f_var2_max": n2 / (n2 - 1) * R ** 2 / 4.0,
         }
 
     return cases

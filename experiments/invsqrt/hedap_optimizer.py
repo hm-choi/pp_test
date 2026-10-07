@@ -9,10 +9,8 @@ Chebyshev + i_max Newton iterations records the MRE and the accumulated
 runtime after each iteration. The optimal iteration per (l, d, c) and the
 optimal (d, c, i) per level are then chosen as in HE-DAP.
 
-Domains (see domains.py):
-- normalized : x = V / V_max in [v_min, 1] (v_min = 1e-3, 1e-4, 1e-5);
-- raw        : x = V in [1e-3, V_max] with V_max from the public bounds of
-               each dataset comparison (Welch V_max and F Var2_max).
+Domains (see domains.py): x = V in [1e-3, V_max] with the Welch V_max from
+the public bounds of each dataset comparison.
 
 Differences from the Lattigo reference code:
 - degree is 2^d - 1 (pp_test coefficients) instead of 2^d - 2;
@@ -33,7 +31,7 @@ HEaaN-specific choices in HEApprox.invSqrt (they shape the search space):
   error for |y0| > 1 is refined by the following Newton iterations).
 
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/invsqrt/hedap_optimizer.py --domains raw
+    python3 experiments/invsqrt/hedap_optimizer.py
 """
 
 import argparse
@@ -70,7 +68,7 @@ L_AFTER_BTS = 12
 RESULT_DIR = Path(__file__).resolve().parent / "results"
 
 RAW_FIELDS = [
-    "domain", "method", "lo", "hi", "level", "degree", "pre_bts", "iteration",
+    "domain", "lo", "hi", "level", "degree", "pre_bts", "iteration",
     "mre", "max_re", "mre_alg", "max_re_alg", "time", "bootstrap_count",
 ]
 
@@ -152,13 +150,13 @@ def get_opt_iter(approx, ctxt, ans, domain, log_degree, pre_bts, i_max=I_MAX):
     ans_alg = np.maximum(x_dec, np.finfo(float).tiny) ** -0.5
 
     # One-off plaintext work (coefficients) outside the timer.
-    approx.inv_sqrt_coeffs(log_degree, dom, domain["method"])
+    approx.inv_sqrt_coeffs(log_degree, dom)
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()
 
     x_half, x_cheb = map_input(engine, ctxt, domain)
-    x_half, y = approx.invSqrt_init(x_half, x_cheb, log_degree, dom, domain["method"], pre_bts)
+    x_half, y = approx.invSqrt_init(x_half, x_cheb, dom, log_degree, pre_bts)
 
     elapsed = time.perf_counter() - start
 
@@ -327,7 +325,7 @@ def optimize(raw, domains):
 def main():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--domains", default="raw", help="normalized, raw, all or comma-separated names")
+    parser.add_argument("--domains", default="all", help="all or comma-separated names")
     parser.add_argument("--levels", type=int, nargs="*", default=list(range(L_MAX, L_BTS, -1)))
     parser.add_argument("--log-degrees", type=int, nargs="*", default=list(range(D_MIN, D_MAX + 1)))
     parser.add_argument("--select-only", action="store_true")
@@ -335,7 +333,7 @@ def main():
     args = parser.parse_args()
 
     domains = get_domains(args.domains)
-    out_dir = args.out_dir or RESULT_DIR / args.domains.replace(",", "_")
+    out_dir = args.out_dir or RESULT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
     raw_path = out_dir / "hedap_raw.csv"
@@ -366,7 +364,7 @@ def main():
 
                         for r in rows:
                             writer.writerow({
-                                "domain": domain["name"], "method": domain["method"],
+                                "domain": domain["name"],
                                 "lo": domain["lo"], "hi": domain["hi"], "level": level,
                                 "degree": 2 ** d - 1, "pre_bts": c, **r,
                             })

@@ -7,11 +7,6 @@ from numpy.polynomial import Chebyshev
 from engine.HEengine import HEengine
 from engine.HEdata import Ciphertext
 
-from coeffs.invSqrt_coeffs import _INV_SQRT_COEFFS
-from coeffs.invSqrt_coeffs_normalized import (
-    _INV_SQRT_NORM_COEFFS,
-    _INV_SQRT_NORM_V_MAX,
-)
 from coeffs.sign_coeffs import _SIGN_PPTEST_DATA
 
 
@@ -116,52 +111,22 @@ class HEApprox:
     def inv_sqrt_coeffs(
         self,
         log_degree: int,
-        domain=None,
-        method="raw",
+        domain,
     ):
 
-        # Chebyshev coefficients of 1 / sqrt(x) for x in `domain`.
-        #
-        # - domain=None        : stored coefficients (coeffs/invSqrt_coeffs.py,
-        #                        generated in coeffs/approx.ipynb).
-        # - method="normalized": x = V / V_max in [v_min, 1]; fixed stored
-        #                        coefficients (coeffs/invSqrt_coeffs_normalized.py).
-        # - method="raw"       : x = V in [v_min, v_max]; coefficients are
-        #                        generated from the public bounds at runtime.
+        # Chebyshev coefficients of 1 / sqrt(x) for x in domain = [v_min, v_max],
+        # generated from the public bounds (same construction as
+        # coeffs/approx.ipynb):
+        # f(t) = 1 / sqrt(x) with x = (v_max - v_min) t / 2 + (v_max + v_min) / 2.
         degree = 2 ** log_degree - 1
-
-        if domain is None:
-            if degree not in _INV_SQRT_COEFFS:
-                raise ValueError(f"Unsupported degree: {degree}")
-
-            return np.asarray(_INV_SQRT_COEFFS[degree], dtype=np.float64)
-
         v_min, v_max = float(domain[0]), float(domain[1])
 
         if not 0.0 < v_min < v_max:
             raise ValueError("domain must satisfy 0 < v_min < v_max")
 
-        if method == "normalized":
-            if v_max != _INV_SQRT_NORM_V_MAX or v_min not in _INV_SQRT_NORM_COEFFS:
-                supported = ", ".join(f"{v:g}" for v in sorted(_INV_SQRT_NORM_COEFFS))
-                raise ValueError(
-                    f"Unsupported normalized domain [{v_min:g}, {v_max:g}]. "
-                    f"Supported v_min: {supported}, v_max: {_INV_SQRT_NORM_V_MAX:g}"
-                )
-
-            if degree not in _INV_SQRT_NORM_COEFFS[v_min]:
-                raise ValueError(f"Unsupported degree: {degree}")
-
-            return np.asarray(_INV_SQRT_NORM_COEFFS[v_min][degree], dtype=np.float64)
-
-        if method != "raw":
-            raise ValueError(f"Unsupported method: {method}")
-
         key = (v_min, v_max, log_degree)
 
         if key not in self._coeff_cache:
-            # Same construction as coeffs/approx.ipynb:
-            # f(t) = 1 / sqrt(x) with x = (v_max - v_min) t / 2 + (v_max + v_min) / 2.
             def func(t):
                 x = (v_max - v_min) * t / 2.0 + (v_max + v_min) / 2.0
                 return x ** -0.5
@@ -175,11 +140,9 @@ class HEApprox:
         self,
         x_half: Ciphertext,
         x_cheb: Ciphertext,
+        domain,
         log_degree=6,
         iteration=7,
-        output_scale=1.0,
-        domain=None,
-        method="raw",
         pre_bts=False,
     ):
 
@@ -193,9 +156,8 @@ class HEApprox:
         x_half, y = self.invSqrt_init(
             x_half,
             x_cheb,
-            log_degree,
             domain,
-            method,
+            log_degree,
             pre_bts,
         )
 
@@ -203,19 +165,14 @@ class HEApprox:
         for _ in range(iteration):
             y = self.newton_step(x_half, y)
 
-        # Apply an optional public output scaling factor.
-        if output_scale != 1.0:
-            y = self.engine.mult(y, output_scale)
-
         return y
 
     def invSqrt_init(
         self,
         x_half: Ciphertext,
         x_cheb: Ciphertext,
+        domain,
         log_degree=6,
-        domain=None,
-        method="raw",
         pre_bts=False,
     ):
 
@@ -224,19 +181,12 @@ class HEApprox:
         # pre_bts: bootstrap x_cheb (in [-1, 1]) first and derive
         # x_half = ((v_max - v_min) * x_cheb + (v_max + v_min)) / 4 from it,
         # i.e. one bootstrap of the input as in HE-DAP.
-        coeffs = self.inv_sqrt_coeffs(log_degree, domain, method)
-
-        # Public bound of x_half = x / 2 (unknown for domain=None).
-        half_bound = None if domain is None else float(domain[1]) / 2.0
+        coeffs = self.inv_sqrt_coeffs(log_degree, domain)
+        v_min, v_max = float(domain[0]), float(domain[1])
 
         x_cheb = Ciphertext(x_cheb)
 
         if pre_bts:
-            if domain is None:
-                raise ValueError("pre_bts requires an explicit domain")
-
-            v_min, v_max = float(domain[0]), float(domain[1])
-
             self._bootstrap(x_cheb)
 
             x_half = self.engine.mult(x_cheb, (v_max - v_min) / 4.0)
@@ -246,32 +196,13 @@ class HEApprox:
         # from the Chebyshev-mapped ciphertext.
         y = self.cheb_invSqrt(x_cheb, coeffs)
 
-        return self.newton_prepare(x_half, half_bound), y
-
-    def he_newton(
-        self,
-        x_half: Ciphertext,
-        y: Ciphertext,
-        iteration=10,
-        half_bound=None,
-    ):
-
-        # Newton iteration for inverse square root:
-        #
-        # y <- 1.5y - x_half * y^3,
-        #
-        # where x_half = x / 2.
-        x_half = self.newton_prepare(x_half, half_bound)
-
-        for _ in range(iteration):
-            y = self.newton_step(x_half, y)
-
-        return y
+        # Public bound of x_half = x / 2 is v_max / 2.
+        return self.newton_prepare(x_half, v_max / 2.0), y
 
     def newton_prepare(
         self,
         x_half: Ciphertext,
-        half_bound=None,
+        half_bound: float,
     ):
 
         # The Newton output level is min(level(x_half), level(y)) - 2 and

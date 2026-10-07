@@ -1,162 +1,112 @@
 # Encrypted hypothesis tests: accuracy and performance
 
-HEaaN FGb CPU. Cases (`experiments/pptest_cases.py`): Insurance charges/1000 by smoker (274 vs 1064), Adult educational-num by income
-and Adult age by gender (first 1024 per group). Two-sided alpha in {0.01, 0.025, 0.05, 0.1}; Welch critical value from the degree-15
-InvDF polynomial (targets t and t^2). 10 repetitions per configuration; statistics are computed once per repetition and every alpha
-(and target) is a separate decision branch; total time = statistics + one branch.
+HEaaN FGb (CPU container `heaan-stat:1.0.0-cpu`, Intel Xeon Icelake, 16 vCPU), log_slots = 15. Two-sided alpha in
+{0.001, 0.01, 0.025, 0.05, 0.1}, 10 repetitions. Statistics are computed once per repetition and every alpha is a separate
+decision branch; total time = statistics + one decision branch (encryption and decryption excluded). Script `run_eval.py`,
+raw results `results/eval_raw.csv`, summary `results/eval_summary.csv`.
 
-invSqrt configurations: `normalized_vmin*` (V/V_max in [v_min,1], HE-DAP u1 per input level), `raw_default` (V in [1e-3, V_max],
-degree 63, 7 iterations), `raw_hedap` (HE-DAP u1 for the case/test domain). Score bounds (public constants per case/test):
-insurance_charges_smoker/welch: 3000, insurance_charges_smoker/f: 20, insurance_charges_smoker/z: 3000, adult_edu_income/welch: 700, adult_edu_income/f: 0.02, adult_edu_income/z: 700, adult_age_gender/welch: 20, adult_age_gender/f: 0.03, adult_age_gender/z: 20.
+## Setup
 
-Decision agreement with SciPy: **192/192 configurations** match in all 10 reps (step, score sign and HE-derived p-value).
-Max statistic relative error 7.8e-07, max p-value error 2.2e-07.
+| case | groups | n1 / n2 | R |
+|---|---|---|---|
+| insurance_charges_smoker | Insurance charges/1000, smoker yes vs no | 274 / 1064 | 63.77 |
+| adult_edu_income | Adult educational-num, income >50K vs <=50K | 1024 / 1024 | 16 |
+| adult_age_gender | Adult age, Female vs Male | 1024 / 1024 | 90 |
 
-## Time and accuracy at alpha = 0.05 (Welch target t^2)
+Adult groups use the first 1,024 records of each group. Data lie in [0, R]; R (public) is the maximum value.
 
-| case | test | invSqrt | total (s) | statistics (s) | BTS | stat rel. err | p-value err | plain decision | step match |
-|---|---|---|---|---|---|---|---|---|---|
-| insurance_charges_smoker | welch | normalized_vmin0.001 | 24.8 +- 1.4 | 12.9 | 8 | 1.73e-08 | 7.73e-106 | 1 | 100% |
-| insurance_charges_smoker | welch | normalized_vmin0.0001 | 23.9 +- 0.6 | 11.7 | 8 | 2.46e-08 | 6.33e-106 | 1 | 100% |
-| insurance_charges_smoker | welch | normalized_vmin1e-05 | 24.8 +- 0.9 | 12.9 | 8 | 1.56e-08 | 1.40e-105 | 1 | 100% |
-| insurance_charges_smoker | welch | raw_default | 32.9 +- 0.9 | 21.4 | 10 | 1.36e-08 | 2.79e-107 | 1 | 100% |
-| insurance_charges_smoker | welch | raw_hedap | 23.2 +- 0.6 | 11.5 | 8 | 1.63e-08 | 2.77e-107 | 1 | 100% |
-| insurance_charges_smoker | f | normalized_vmin0.001 | 21.2 +- 0.3 | 12.0 | 7 | 2.06e-08 | 1.43e-57 | 1 | 100% |
-| insurance_charges_smoker | f | normalized_vmin0.0001 | 20.5 +- 0.5 | 11.1 | 7 | 2.13e-08 | 1.48e-57 | 1 | 100% |
-| insurance_charges_smoker | f | normalized_vmin1e-05 | 21.9 +- 0.6 | 12.4 | 7 | 4.44e-08 | 3.08e-57 | 1 | 100% |
-| insurance_charges_smoker | f | raw_default | 31.1 +- 1.0 | 21.4 | 9 | 1.44e-07 | 9.96e-57 | 1 | 100% |
-| insurance_charges_smoker | f | raw_hedap | 30.5 +- 0.6 | 20.8 | 8 | 1.63e-07 | 1.13e-56 | 1 | 100% |
-| insurance_charges_smoker | z | public_variance | 10.3 +- 0.3 | 0.5 | 4 | 1.19e-09 | 3.64e-241 | 1 | 100% |
-| adult_edu_income | welch | normalized_vmin0.001 | 24.5 +- 1.0 | 12.6 | 8 | 2.89e-08 | 3.58e-70 | 1 | 100% |
-| adult_edu_income | welch | normalized_vmin0.0001 | 24.5 +- 0.6 | 12.8 | 8 | 2.19e-08 | 3.40e-70 | 1 | 100% |
-| adult_edu_income | welch | normalized_vmin1e-05 | 28.7 +- 1.1 | 17.1 | 9 | 3.11e-08 | 3.36e-70 | 1 | 100% |
-| adult_edu_income | welch | raw_default | 33.3 +- 1.2 | 21.5 | 10 | 7.85e-08 | 1.05e-68 | 1 | 100% |
-| adult_edu_income | welch | raw_hedap | 19.8 +- 0.7 | 8.1 | 7 | 7.83e-07 | 2.00e-68 | 1 | 100% |
-| adult_edu_income | f | normalized_vmin0.001 | 21.6 +- 0.8 | 11.9 | 7 | 3.53e-08 | 5.73e-08 | 1 | 100% |
-| adult_edu_income | f | normalized_vmin0.0001 | 21.8 +- 0.6 | 12.4 | 7 | 4.37e-08 | 7.10e-08 | 1 | 100% |
-| adult_edu_income | f | normalized_vmin1e-05 | 26.4 +- 0.7 | 16.8 | 8 | 1.98e-08 | 3.22e-08 | 1 | 100% |
-| adult_edu_income | f | raw_default | 28.0 +- 0.6 | 16.6 | 9 | 5.08e-08 | 8.25e-08 | 1 | 100% |
-| adult_edu_income | f | raw_hedap | 26.1 +- 0.5 | 16.6 | 8 | 5.78e-08 | 9.39e-08 | 1 | 100% |
-| adult_edu_income | z | public_variance | 10.1 +- 0.4 | 0.5 | 4 | 6.26e-09 | 5.45e-78 | 1 | 100% |
-| adult_age_gender | welch | normalized_vmin0.001 | 25.1 +- 0.9 | 13.0 | 8 | 1.84e-08 | 1.42e-09 | 1 | 100% |
-| adult_age_gender | welch | normalized_vmin0.0001 | 23.2 +- 0.7 | 11.6 | 8 | 1.07e-08 | 1.41e-09 | 1 | 100% |
-| adult_age_gender | welch | normalized_vmin1e-05 | 24.6 +- 0.8 | 13.0 | 8 | 1.48e-08 | 2.12e-09 | 1 | 100% |
-| adult_age_gender | welch | raw_default | 33.3 +- 1.1 | 21.4 | 10 | 8.57e-09 | 4.94e-11 | 1 | 100% |
-| adult_age_gender | welch | raw_hedap | 23.9 +- 0.9 | 11.7 | 8 | 2.56e-08 | 1.38e-10 | 1 | 100% |
-| adult_age_gender | f | normalized_vmin0.001 | 24.4 +- 1.0 | 12.6 | 8 | 9.16e-09 | 7.21e-09 | 1 | 100% |
-| adult_age_gender | f | normalized_vmin0.0001 | 22.4 +- 0.6 | 11.1 | 8 | 1.36e-08 | 1.07e-08 | 1 | 100% |
-| adult_age_gender | f | normalized_vmin1e-05 | 24.3 +- 1.1 | 12.5 | 8 | 1.76e-08 | 1.39e-08 | 1 | 100% |
-| adult_age_gender | f | raw_default | 30.7 +- 0.7 | 21.2 | 9 | 8.56e-08 | 6.74e-08 | 1 | 100% |
-| adult_age_gender | f | raw_hedap | 38.8 +- 1.0 | 29.3 | 10 | 2.73e-07 | 2.15e-07 | 1 | 100% |
-| adult_age_gender | z | public_variance | 10.4 +- 0.5 | 0.5 | 4 | 3.84e-09 | 3.40e-11 | 1 | 100% |
+Decision scores (positive = reject) and public bounds B (the sign approximation receives s / B):
+- Welch: s = (mean1 - mean2)^2 - c^2 V, B = max(R^2, c_max^2 V_max); c^2 from the degree-15 polynomial of u = 1/df,
+  c_max^2 at df = min(n1, n2) - 1; V_max = R^2/4 (1/(n1-1) + 1/(n2-1)). invSqrt of V (for 1/df) on [1e-3, V_max].
+- F: s = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2), B = max(A, F_L B_v) max(A, F_U B_v), A = n1/(n1-1) R^2/4, B_v = n2/(n2-1) R^2/4.
+- Z: s = Z^2 - z^2, B = max(R^2 / V_public, z^2); the sample variances are used as the public variances.
 
-All alphas and both Welch targets: `results/eval_summary.csv`; per repetition: `results/eval_raw.csv`.
+Welch invSqrt configurations: `default` = degree 63, 7 Newton iterations; `hedap` = HE-DAP selection per input level
+(experiments/invsqrt/RESULTS.md).
 
-## Boundary stress test (`run_stress.py`)
+Plaintext reference (SciPy):
 
-Design of `experiments/experiment1/test3.py`: two synthetic groups of 128 samples, Welch t = (t_crit + margin) * SE,
-margins +-0.001, +-0.002, +-0.005, +-0.01, alpha = 0.05, score bound 0.05. Critical value + score for degrees 7..127 and both targets;
-full decision (sign/step) at degree 15. 10 repetitions per margin and invSqrt configuration.
+| case | Welch T^2 (p) | F (p) | Z (p) |
+|---|---|---|---|
+| insurance_charges_smoker | 1073 (5.89e-103) | see note | 32.75 (2.85e-235) |
+| adult_edu_income | 323.4 (3.20e-67) | see note | 17.98 (2.68e-72) |
+| adult_age_gender | 11.44 (7.34e-04) | see note | -3.382 (7.20e-04) |
 
-| degree | target | with sign | runs | score sign match | step match | max critical err | max score err | branch time (s) |
-|---|---|---|---|---|---|---|---|---|
-| 7 | t | no | 320 | 100% | - | 3.05e-06 | 1.33e-05 | 1.98 |
-| 7 | t2 | no | 320 | 100% | - | 5.84e-04 | 2.30e-03 | 1.91 |
-| 15 | t | no | 320 | 100% | - | 2.83e-07 | 1.63e-06 | 2.07 |
-| 15 | t | yes | 320 | 100% | 100% | 2.83e-07 | 1.63e-06 | 13.33 |
-| 15 | t2 | no | 320 | 100% | - | 2.85e-07 | 1.63e-06 | 2.05 |
-| 15 | t2 | yes | 320 | 100% | 100% | 2.85e-07 | 1.63e-06 | 13.34 |
-| 31 | t | no | 320 | 100% | - | 2.84e-07 | 1.63e-06 | 2.17 |
-| 31 | t2 | no | 320 | 100% | - | 2.85e-07 | 1.63e-06 | 2.30 |
-| 63 | t | no | 320 | 100% | - | 2.82e-07 | 1.62e-06 | 2.37 |
-| 63 | t2 | no | 320 | 100% | - | 2.85e-07 | 1.63e-06 | 2.72 |
-| 127 | t | no | 320 | 100% | - | 2.84e-07 | 1.63e-06 | 2.54 |
-| 127 | t2 | no | 320 | 100% | - | 2.85e-07 | 1.63e-06 | 3.36 |
+F statistics: Insurance 3.708 (p = 3.6e-52), Adult educational-num 0.8807 (p = 0.0424), Adult age 1.159 (p = 0.0183).
+Plaintext decisions: reject in 55 of 60 (case, test, configuration, alpha) combinations; fail to reject for F at
+Adult educational-num alpha = 0.001, 0.01, 0.025 and Adult age alpha = 0.001, 0.01.
 
-All 3840 results match the plaintext decision (all invSqrt configurations: normalized v_min 1e-3/1e-4/1e-5 and raw_default).
+## Decision agreement
 
-## Ratio vs product score (`--score product`, `results/product/`)
+**60/60 combinations** match the SciPy decision in all 10 repetitions (step output > 0.5 vs. plaintext score > 0; the sign of the decrypted score and the decision from the HE-derived p-value agree as well).
 
-- ratio: s = T^2 - c^2 (Welch), (F - F_L)(F - F_U) (F), Z^2 - z^2 (Z); score bound chosen from the plaintext scores (not public).
-- product: s' = (mean1 - mean2)^2 - c^2 V, B = max(R^2, c_max^2 V_max) with c_max at df = min(n1, n2) - 1;
-  s'' = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2), B = max(A, F_L B_v) max(A, F_U B_v) (no invSqrt in the F decision);
-  Z unchanged with B = max(R^2 / V_public, z^2). All bounds use only public values (R, n1, n2, alpha).
+## Intermediate-value accuracy
 
-Product decisions match SciPy in **144/144** configurations (all 10 reps). F product has a single configuration (`no_invsqrt`) and reports no F statistic / p-value.
+Maximum over cases, configurations, alphas and repetitions.
 
-alpha = 0.05, Welch target t^2, normalized v_min = 1e-3 (F product: no_invsqrt):
+| test | statistic rel. err. | 1/df rel. err. | critical value rel. err. | score err. / B | p-value abs. err. | \|s / B\| (min - max) |
+|---|---|---|---|---|---|---|
+| Welch | 7.5e-07 | 9.0e-03 | 4.8e-04 | 4.9e-07 | 1.7e-10 | 2.7e-05 - 1.37e-01 |
+| F | - | - | public | 4.4e-10 | - | 9.2e-06 - 7.74e-03 |
+| Z | 5.9e-09 | - | public | 3.7e-10 | 2.8e-11 | 2.8e-05 - 1.37e-01 |
 
-| case | test | time ratio (s) | time product (s) | BTS ratio -> product | \|s/B\| ratio | \|s/B\| product | product HE err / B |
-|---|---|---|---|---|---|---|---|
-| insurance_charges_smoker | welch | 24.8 +- 1.4 | 25.6 +- 1.6 | 8 -> 8 | 3.6e-01 | 1.4e-01 | 7.1e-10 |
-| insurance_charges_smoker | f | 21.2 +- 0.3 | 10.8 +- 0.3 | 7 -> 4 | 3.6e-01 | 7.4e-03 | 4.0e-10 |
-| insurance_charges_smoker | z | 10.3 +- 0.3 | 10.4 +- 0.6 | 4 -> 4 | 3.6e-01 | 1.4e-01 | 3.7e-10 |
-| adult_edu_income | welch | 24.5 +- 1.0 | 25.8 +- 0.8 | 8 -> 8 | 4.6e-01 | 1.5e-02 | 6.8e-10 |
-| adult_edu_income | f | 21.6 +- 0.8 | 10.0 +- 0.1 | 7 -> 4 | 4.8e-02 | 9.1e-06 | 2.9e-10 |
-| adult_edu_income | z | 10.1 +- 0.4 | 9.6 +- 0.1 | 4 -> 4 | 4.6e-01 | 1.5e-02 | 2.1e-10 |
-| adult_age_gender | welch | 25.1 +- 0.9 | 25.4 +- 1.8 | 8 -> 8 | 3.8e-01 | 3.5e-04 | 4.2e-10 |
-| adult_age_gender | f | 24.4 +- 1.0 | 10.8 +- 0.5 | 8 -> 4 | 2.6e-01 | 5.4e-05 | 2.9e-10 |
-| adult_age_gender | z | 10.4 +- 0.5 | 10.5 +- 0.6 | 4 -> 4 | 3.8e-01 | 3.5e-04 | 6.9e-12 |
+Welch by alpha (maximum over cases and configurations):
 
-Stress test (same design), product score with the public bound:
+| alpha | critical value rel. err. | score err. / B | min \|s / B\| |
+|---|---|---|---|
+| 0.001 | 4.8e-04 | 4.9e-07 | 2.7e-05 |
+| 0.01 | 8.4e-06 | 5.7e-09 | 2.2e-04 |
+| 0.025 | 6.7e-06 | 3.4e-09 | 3.0e-04 |
+| 0.05 | 6.0e-06 | 3.3e-09 | 3.5e-04 |
+| 0.1 | 1.0e-05 | 2.8e-09 | 4.1e-04 |
 
-| score | results | score sign match | step match (degree 15) | min \|s/B\| (margin +-0.001) | max HE err / B |
+1/df relative error by case and configuration: adult_age_gender default 1.4e-05, adult_age_gender hedap 5.9e-06, adult_edu_income default 6.5e-03, adult_edu_income hedap 9.0e-03, insurance_charges_smoker default 8.8e-07, insurance_charges_smoker hedap 6.7e-07.
+The F test computes no F statistic or p-value (the decision score needs no division), so those columns are empty.
+
+## Performance
+
+Mean +- standard deviation over 10 repetitions (s) / bootstraps. Times vary by less than 1 s across alphas; alpha = 0.05 shown,
+all alphas in `results/eval_summary.csv`.
+
+| case | Welch hedap | Welch default | F | Z | Welch hedap statistics part |
 |---|---|---|---|---|---|
-| ratio (B = 0.05) | 3840 | 3840/3840 | 640/640 | 7.9e-02 | 3.3e-05 |
-| product (public B) | 3840 | 3840/3840 | 640/640 | 2.2e-06 | 1.5e-09 |
+| insurance_charges_smoker | 24.8 +- 1.5 / 8 | 31.3 +- 1.2 / 9 | 10.6 +- 0.4 / 4 | 10.5 +- 0.5 / 4 | 12.5 |
+| adult_edu_income | 20.0 +- 1.0 / 7 | 31.0 +- 1.5 / 9 | 10.2 +- 0.1 / 4 | 9.8 +- 0.1 / 4 | 8.4 |
+| adult_age_gender | 21.8 +- 0.8 / 7 | 29.3 +- 1.0 / 9 | 11.0 +- 0.4 / 4 | 10.2 +- 0.5 / 4 | 9.5 |
 
-Notes:
-- Public bounds are much larger than data-fitted ones, so |s/B| shrinks (smallest: 2.2e-6 in the stress test, 9.1e-6 for Adult educational-num F);
-  still above the sign validity floor (1.5e-7) and about 1000x above the HE error / B (~1e-9).
-- Welch: same time and bootstraps as ratio; the score no longer divides by V, but 1/df still uses invSqrt (V inside the invSqrt domain).
-- F: invSqrt leaves the decision path: about 10-11 s instead of 21-24 s, 4 bootstraps instead of 7-8.
-- Degree-7 t^2 critical values have HE error close to the stress margin (margin / error >= 1.7) in both modes; degree 15 is used by default.
+Time ranges over all alphas:
+- welch hedap: 19.9 - 24.8 s
+- welch default: 29.2 - 31.6 s
+- f none: 10.2 - 11.2 s
+- z none: 9.7 - 10.6 s
 
-## Variance computation: scaled vs moment (`--variance moment`, `results/ratio_moment/`, `results/product_moment/`)
+## Boundary stress test
 
-- scaled: n sum(x^2) - (sum x)^2 = n(n-1) s^2, then constants such as 1/(n^2 (n-1)) (below 1e-8, split into 2-3 factors by HEengine.mult).
-- moment: sum(x^2)/n - (sum(x)/n)^2 (constants of order 1/n, no splitting).
+Script `run_stress.py`, raw results `results/stress_raw.csv`. Design of `experiments/experiment1/test3.py`: two synthetic groups
+of 128 samples, x = 10 + 5 linspace(-1, 1, 128) +- gap/2, with the Welch t statistic set to (t_crit + margin) SE, t_crit = 1.969
+(alpha = 0.05, df = 254), margin in {+-0.001, +-0.002, +-0.005, +-0.01} (+-0.001 is 0.05% of t_crit). invSqrt `default`
+(degree 63, 7 iterations), 10 repetitions per margin. For every repetition the statistics are computed once; the score is
+evaluated with the critical-value polynomial of degree 7, 15, 31, 63 and 127, and the full decision (sign, step) with degree 15.
+Public bound B = 235.9 (R^2 dominates).
 
-Same cases, alphas, targets, configurations and 10 repetitions. All decisions match SciPy in both modes.
+Decision agreement: 480/480 score signs and 80/80 degree-15 step outputs match the plaintext decision (step = 1.000000 for
+positive margins, 0.000000 for negative margins).
 
-| score | test | mean time scaled (s) | mean time moment (s) | max stat rel. err scaled / moment |
-|---|---|---|---|---|
-| ratio | welch | 25.9 | 24.1 | 7.8e-07 / 7.4e-07 |
-| ratio | f | 25.9 | 23.6 | 2.7e-07 / 1.2e-07 |
-| ratio | z | 10.3 | 9.7 | 6.3e-09 / 9.6e-09 |
-| product | welch | 26.2 | 22.8 | 7.4e-07 / 7.5e-07 |
-| product | f | 10.7 | 10.2 | nan / nan |
-| product | z | 10.2 | 9.8 | 6.8e-09 / 6.5e-09 |
+| margin | \|s / B\| | max HE score err. / B (degree 15) |
+|---|---|---|
+| +-0.001 | 2.2e-06 | 1.5e-09 |
+| +-0.002 | 4.5e-06 | 1.6e-09 |
+| +-0.005 | 1.1e-05 | 1.0e-09 |
+| +-0.01 | 2.2e-05 | 1.2e-09 |
 
-Per configuration (alpha = 0.05, Welch target t^2, product score):
+| critical-value degree | score sign match | max critical value rel. err. | max score err. / B | min margin / error | score branch time (s) | score level |
+|---|---|---|---|---|---|---|
+| 7 | 80/80 | 3.0e-04 | 1.3e-06 | 1.7 | 2.01 | 8 |
+| 15 | 80/80 | 1.6e-07 | 1.6e-09 | 1494 | 2.09 | 7 |
+| 31 | 80/80 | 1.4e-07 | 1.3e-09 | 1653 | 2.22 | 6 |
+| 63 | 80/80 | 1.4e-07 | 1.4e-09 | 1641 | 2.33 | 5 |
+| 127 | 80/80 | 9.8e-08 | 1.3e-09 | 1928 | 2.59 | 4 |
 
-| case | test | invSqrt | scaled time (s) / BTS | moment time (s) / BTS |
-|---|---|---|---|---|
-| insurance_charges_smoker | welch | normalized_vmin0.001 | 25.6 / 8 | 20.7 +- 0.7 / 7 |
-| insurance_charges_smoker | welch | normalized_vmin0.0001 | 24.0 / 8 | 20.5 +- 0.9 / 7 |
-| insurance_charges_smoker | welch | normalized_vmin1e-05 | 24.6 / 8 | 24.5 +- 1.4 / 8 |
-| insurance_charges_smoker | welch | raw_default | 33.4 / 10 | 28.9 +- 1.7 / 9 |
-| insurance_charges_smoker | welch | raw_hedap | 23.2 / 8 | 23.0 +- 1.2 / 8 |
-| insurance_charges_smoker | f | no_invsqrt | 10.8 / 4 | 11.0 +- 0.7 / 4 |
-| insurance_charges_smoker | z | public_variance | 10.4 / 4 | 10.5 +- 0.7 / 4 |
-| adult_edu_income | welch | normalized_vmin0.001 | 25.8 / 8 | 19.6 +- 0.9 / 7 |
-| adult_edu_income | welch | normalized_vmin0.0001 | 24.5 / 8 | 20.3 +- 0.9 / 7 |
-| adult_edu_income | welch | normalized_vmin1e-05 | 29.1 / 9 | 25.9 +- 1.4 / 8 |
-| adult_edu_income | welch | raw_default | 33.2 / 10 | 28.8 +- 1.7 / 9 |
-| adult_edu_income | welch | raw_hedap | 19.8 / 7 | 20.0 +- 1.1 / 7 |
-| adult_edu_income | f | no_invsqrt | 10.0 / 4 | 9.9 +- 0.1 / 4 |
-| adult_edu_income | z | public_variance | 9.6 / 4 | 9.4 +- 0.2 / 4 |
-| adult_age_gender | welch | normalized_vmin0.001 | 25.4 / 8 | 19.5 +- 0.5 / 7 |
-| adult_age_gender | welch | normalized_vmin0.0001 | 23.7 / 8 | 20.2 +- 0.4 / 7 |
-| adult_age_gender | welch | normalized_vmin1e-05 | 24.8 / 8 | 24.1 +- 0.3 / 8 |
-| adult_age_gender | welch | raw_default | 33.3 / 10 | 28.0 +- 0.4 / 9 |
-| adult_age_gender | welch | raw_hedap | 23.1 / 8 | 20.0 +- 0.5 / 7 |
-| adult_age_gender | f | no_invsqrt | 10.8 / 4 | 9.8 +- 0.1 / 4 |
-| adult_age_gender | z | public_variance | 10.5 / 4 | 9.4 +- 0.1 / 4 |
-
-Stress test: 3840/3840 results match in all four runs (ratio/product x scaled/moment).
-
-Notes: Welch product with v_min = 1e-3 or 1e-4 drops one bootstrap (8 -> 7, ~25 s -> ~20 s) because the invSqrt input
-arrives one level higher and the final extended bootstrap is no longer needed; v_min = 1e-5 (ratio) can need one more bootstrap
-(8 -> 9) since HE-DAP selects a different configuration at the new input level. F product has no variance constants in a
-critical position and is unchanged.
+Statistics 18.8 +- 1.0 s (4 bootstraps), full degree-15 decision 11.6 s (5 bootstraps), total 30.4 +- 1.5 s.
+T^2 relative error <= 4.5e-7, 1/df relative error <= 1.1e-5.
+Degree 7 is correct but its error reaches 60% of the smallest margin; from degree 15 the margin exceeds the error by >1000x.

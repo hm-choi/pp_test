@@ -1,54 +1,45 @@
 {
   "insurance_charges_smoker/welch": {
-    "score_bound": 3000,
     "n1": 274,
     "n2": 1064,
     "R": 63.77042801
   },
   "insurance_charges_smoker/f": {
-    "score_bound": 20,
     "n1": 274,
     "n2": 1064,
     "R": 63.77042801
   },
   "insurance_charges_smoker/z": {
-    "score_bound": 3000,
     "n1": 274,
     "n2": 1064,
     "R": 63.77042801
   },
   "adult_edu_income/welch": {
-    "score_bound": 700,
     "n1": 1024,
     "n2": 1024,
     "R": 16.0
   },
   "adult_edu_income/f": {
-    "score_bound": 0.02,
     "n1": 1024,
     "n2": 1024,
     "R": 16.0
   },
   "adult_edu_income/z": {
-    "score_bound": 700,
     "n1": 1024,
     "n2": 1024,
     "R": 16.0
   },
   "adult_age_gender/welch": {
-    "score_bound": 20,
     "n1": 1024,
     "n2": 1024,
     "R": 90.0
   },
   "adult_age_gender/f": {
-    "score_bound": 0.03,
     "n1": 1024,
     "n2": 1024,
     "R": 90.0
   },
   "adult_age_gender/z": {
-    "score_bound": 20,
     "n1": 1024,
     "n2": 1024,
     "R": 90.0
