@@ -83,30 +83,37 @@ Time ranges over all alphas:
 ## Boundary stress test
 
 Script `run_stress.py`, raw results `results/stress_raw.csv`. Design of `experiments/experiment1/test3.py`: two synthetic groups
-of 128 samples, x = 10 + 5 linspace(-1, 1, 128) +- gap/2, with the Welch t statistic set to (t_crit + margin) SE, t_crit = 1.969
-(alpha = 0.05, df = 254), margin in {+-0.001, +-0.002, +-0.005, +-0.01} (+-0.001 is 0.05% of t_crit). invSqrt `default`
-(degree 63, 7 iterations), 10 repetitions per margin. For every repetition the statistics are computed once; the score is
-evaluated with the critical-value polynomial of degree 7, 15, 31, 63 and 127, and the full decision (sign, step) with degree 15.
-Public bound B = 235.9 (R^2 dominates).
+of 128 samples, x = 10 + 5 linspace(-1, 1, 128) +- gap/2, with the Welch t statistic set to (t_crit + margin) SE, where t_crit is
+the two-sided critical value at df = 254 for each alpha in {0.001, 0.01, 0.025, 0.05, 0.1} (t_crit = 3.336, 2.595, 1.969 at
+alpha = 0.001, 0.01, 0.05), margin in {+-0.001, +-0.002, +-0.005, +-0.01}. invSqrt `default` (degree 63, 7 iterations),
+10 repetitions per (alpha, margin). For every repetition the statistics are computed once; the score is evaluated with the
+critical-value polynomial of degree 7, 15, 31, 63 and 127, and the full decision (sign, step) with degree 15.
+Public bound B = 234 - 244 (R^2 dominates).
 
-Decision agreement: 480/480 score signs and 80/80 degree-15 step outputs match the plaintext decision (step = 1.000000 for
-positive margins, 0.000000 for negative margins).
+Full decision (degree 15, sign and step): **400/400 match** the plaintext decision (80 per alpha; step = 1.000000 for positive
+margins, 0.000000 for negative margins).
 
-| margin | \|s / B\| | max HE score err. / B (degree 15) |
-|---|---|---|
-| +-0.001 | 2.2e-06 | 1.5e-09 |
-| +-0.002 | 4.5e-06 | 1.6e-09 |
-| +-0.005 | 1.1e-05 | 1.0e-09 |
-| +-0.01 | 2.2e-05 | 1.2e-09 |
+Score sign by critical-value degree (80 results per cell; min margin / error = smallest |s| / |HE score error| over the cell):
 
-| critical-value degree | score sign match | max critical value rel. err. | max score err. / B | min margin / error | score branch time (s) | score level |
+| alpha | \|s / B\| at margin +-0.001 | degree 7 | degree 15 | degree 31 | degree 63 | degree 127 |
 |---|---|---|---|---|---|---|
-| 7 | 80/80 | 3.0e-04 | 1.3e-06 | 1.7 | 2.01 | 8 |
-| 15 | 80/80 | 1.6e-07 | 1.6e-09 | 1494 | 2.09 | 7 |
-| 31 | 80/80 | 1.4e-07 | 1.3e-09 | 1653 | 2.22 | 6 |
-| 63 | 80/80 | 1.4e-07 | 1.4e-09 | 1641 | 2.33 | 5 |
-| 127 | 80/80 | 9.8e-08 | 1.3e-09 | 1928 | 2.59 | 4 |
+| 0.001 | 3.6e-06 | 40/80 (0.0x) | 80/80 (2.1x) | 80/80 (90.0x) | 80/80 (87.2x) | 80/80 (87.1x) |
+| 0.01 | 2.9e-06 | 40/80 (0.0x) | 80/80 (1191x) | 80/80 (1178x) | 80/80 (1222x) | 80/80 (1415x) |
+| 0.025 | 2.5e-06 | 50/80 (0.1x) | 80/80 (2060x) | 80/80 (2407x) | 80/80 (1823x) | 80/80 (1816x) |
+| 0.05 | 2.2e-06 | 80/80 (1.7x) | 80/80 (1494x) | 80/80 (1653x) | 80/80 (1641x) | 80/80 (1928x) |
+| 0.1 | 1.9e-06 | 80/80 (30.4x) | 80/80 (1592x) | 80/80 (3168x) | 80/80 (1796x) | 80/80 (2468x) |
 
-Statistics 18.8 +- 1.0 s (4 bootstraps), full degree-15 decision 11.6 s (5 bootstraps), total 30.4 +- 1.5 s.
-T^2 relative error <= 4.5e-7, 1/df relative error <= 1.1e-5.
-Degree 7 is correct but its error reaches 60% of the smallest margin; from degree 15 the margin exceeds the error by >1000x.
+Maximum critical-value relative error (HE) by degree:
+
+| alpha | degree 7 | 15 | 31 | 63 | 127 |
+|---|---|---|---|---|---|
+| 0.001 | 1.0e+00 | 1.4e-04 | 3.8e-06 | 3.9e-06 | 3.9e-06 |
+| 0.01 | 4.5e-02 | 2.1e-07 | 2.8e-07 | 2.0e-07 | 1.6e-07 |
+| 0.025 | 3.0e-03 | 1.5e-07 | 1.2e-07 | 1.0e-07 | 1.6e-07 |
+| 0.05 | 3.0e-04 | 1.6e-07 | 1.4e-07 | 1.4e-07 | 9.8e-08 |
+| 0.1 | 2.0e-05 | 1.7e-07 | 1.5e-07 | 1.6e-07 | 1.4e-07 |
+
+Statistics 17.8 +- 1.2 s (4 bootstraps), full degree-15 decision 11.3 s (5 bootstraps), total 29.1 +- 1.7 s.
+T^2 relative error <= 4.5e-07, 1/df relative error <= 1.1e-05.
+Degree 7 fails at every alpha below 0.05 (negative margins). Degree 15 is correct everywhere; its margin over the error is
+>1000x except alpha = 0.001 (2.1x, from the degree-15 coefficient error 9.4e-4 for that alpha), where degree 31 gives 87x.
