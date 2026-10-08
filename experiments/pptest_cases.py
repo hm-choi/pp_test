@@ -2,9 +2,8 @@
 
 Each case returns two groups on [0, R] with the public values used by
 HEHypothesisTesting (group sizes n1, n2 and the public range bound R).
-Adult groups use the first 1,024 records of each group, as in the earlier
-experiments (experiments/experiment1, experiment2); the other datasets use
-every record of the two groups.
+Adult groups use the first 1,024 records of each group; the other datasets
+use every record of the two groups.
 
 Sources (UCI Machine Learning Repository, CC BY 4.0), files in datasets/:
 - Heart Disease, processed Cleveland data (heart_disease_processed_cleveland.data);

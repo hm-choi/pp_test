@@ -1,6 +1,6 @@
 """Boundary-sensitive decision (stress) test for Welch's t-test.
 
-Follows experiments/experiment1/test3.py: two synthetic groups of 128 samples
+Two synthetic groups of 128 samples
 (10 + 5 * linspace(-1, 1, 128), shifted by +/- mean_gap / 2) whose Welch
 t statistic is (t_crit + margin) * SE for margins in MARGINS around the
 two-sided critical value t_crit at each alpha in ALPHAS.

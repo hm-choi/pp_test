@@ -79,7 +79,7 @@ Welch by case (maximum over configurations, alphas and repetitions):
   (1.6e-4), while the score error / B stays <= 1.8e-7.
 - 1/df errors of 2e-3 to 9e-3 occur for small V (Adult educational-num, Diabetes, Credit, Bank); df >= 2000 there, so the
   critical value changes by < 1e-6.
-- The F test computes no F statistic or p-value (the decision score needs no division).
+- The F decision is taken from the score s directly; it needs no division and no invSqrt.
 
 ## Performance
 
@@ -104,7 +104,7 @@ alphas in `results/eval_summary.csv`).
 
 ## Boundary stress test
 
-Script `run_stress.py`, raw results `results/stress_raw.csv`. Design of `experiments/experiment1/test3.py`: two synthetic groups
+Script `run_stress.py`, raw results `results/stress_raw.csv`. Design: two synthetic groups
 of 128 samples, x = 10 + 5 linspace(-1, 1, 128) +- gap/2, with the Welch t statistic set to (t_crit + margin) SE, where t_crit is
 the two-sided critical value at df = 254 for each alpha in {0.001, 0.01, 0.025, 0.05, 0.1} (t_crit = 3.336, 2.595, 1.969 at
 alpha = 0.001, 0.01, 0.05), margin in {+-0.001, +-0.002, +-0.005, +-0.01}. invSqrt `default` (degree 63, 7 iterations),

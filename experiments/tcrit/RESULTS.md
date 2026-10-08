@@ -241,17 +241,119 @@ Case ranges (MaxRE):
 
 ## HE evaluation
 
-`tcrit_experiment.py --part he`, raw results `results/he_raw.csv`: `HEHypothesisTesting._critical_value_from_inv_df` (stored 1/df
-coefficients, u = 1/df in [1/2000, 1]) on encrypted u for df log-spaced in [1, 2000] (one ciphertext, 32768 slots), input
-level 12, 10 repetitions. MaxRE against the exact c^2; time excludes encryption and decryption.
+`tcrit_experiment.py --part he` (about 5.5 h on the CPU container), raw results `results/he_raw.csv` (polynomials) and
+`results/he_lookup_raw.csv` (lookup tables). Every method starts from the same encrypted u = 1/df at level 12 (fresh
+encryption, absolute error 1.8e-7) and is evaluated under the same conditions as the plaintext part (global range and one
+condition per distinct case range; the Welch df of the cases are added to the evaluated points), 10 repetitions. MaxRE is
+taken against the exact c^2 over all repetitions; time excludes encryption and decryption.
 
-| degree | levels | time (s) | MaxRE alpha = 0.001 | 0.01 | 0.025 | 0.05 | 0.1 |
-|---|---|---|---|---|---|---|---|
-| 7 | 12 -> 8 | 0.226 +- 0.023 | 4.8e+01 | 1.5e-01 | 1.0e-02 | 1.0e-03 | 6.7e-05 |
-| 15 | 12 -> 7 | 0.329 +- 0.023 | 9.5e-04 | 1.4e-06 | 1.1e-06 | 9.4e-07 | 6.0e-07 |
-| 31 | 12 -> 6 | 0.598 +- 0.088 | 3.0e-05 | 1.3e-06 | 1.0e-06 | 8.4e-07 | 5.9e-07 |
-| 63 | 12 -> 5 | 0.999 +- 0.239 | 2.6e-05 | 1.3e-06 | 1.1e-06 | 8.2e-07 | 5.5e-07 |
-| 127 | 12 -> 4 | 1.589 +- 0.586 | 3.0e-05 | 1.4e-06 | 9.5e-07 | 7.0e-07 | 4.9e-07 |
+- 1/df (stored): `HEHypothesisTesting._critical_value_from_inv_df`, the coefficients used by PP-TEST (u in [1/2000, 1]);
+  one ciphertext, every slot one df (global: 32768 log-spaced df; case ranges: 32767 log-spaced df plus the Welch df).
+- 1/df (range fit): 1/df polynomial refitted on the case range [1/df_hi, 1/df_lo].
+- df (HE division): df = 1/u computed in HE (invSqrt of u * df_lo on [df_lo / df_hi, 1], squared; degree 63 with 4 Newton
+  iterations on the global range, degree 31 with 1 iteration on the case ranges), then the df polynomial fitted on the
+  condition range. The time includes the division stage.
+- Lookup tables without division: df >= d_j is evaluated as u <= 1/d_j, i.e. one composite sign of (u - 1/d_j) / width
+  for all entries at once (packed in the slots; 32768 entries per ciphertext). Floor and linear interpolation in 1/df are
+  public weighted slot sums of the same step vector (floor) or of (u - 1/d_j) * step (interpolation). One df per
+  ciphertext: 20 interior points of the global range, 3 interior points of each case range and the Welch df. The textbook
+  table has 38 entries (with df = infinity), the integer table every integer df of the range.
 
-From degree 15 the HE error is at the CKKS noise level (5e-7 to 1.5e-6) except alpha = 0.001, where it equals the
-plaintext polynomial error (9.4e-4 at degree 15, ~3e-5 from degree 31).
+### Polynomials, global range [1, 2000]
+
+| input | degree | time (s) | levels | BTS | MaxRE alpha = 0.001 | 0.01 | 0.025 | 0.05 | 0.1 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1/df (stored) | 7 | 0.19 +- 0.02 | 12 -> 8 | 0 | 4.8e+01 | 1.5e-01 | 1.0e-02 | 1.0e-03 | 6.7e-05 |
+| 1/df (stored) | 15 | 0.33 +- 0.03 | 12 -> 7 | 0 | 9.5e-04 | 1.4e-06 | 9.6e-07 | 7.2e-07 | 5.0e-07 |
+| 1/df (stored) | 31 | 0.59 +- 0.09 | 12 -> 6 | 0 | 2.8e-05 | 1.4e-06 | 1.2e-06 | 9.0e-07 | 6.3e-07 |
+| 1/df (stored) | 63 | 0.92 +- 0.23 | 12 -> 5 | 0 | 2.8e-05 | 1.6e-06 | 1.0e-06 | 8.3e-07 | 5.1e-07 |
+| 1/df (stored) | 127 | 1.60 +- 0.60 | 12 -> 4 | 0 | 3.1e-05 | 1.2e-06 | 1.1e-06 | 9.5e-07 | 6.0e-07 |
+| df (HE division) | 7 | 8.18 +- 0.38 | 12 -> 4 | 2 | 1.0e+00 | 1.0e+00 | 9.9e-01 | 9.7e-01 | 9.2e-01 |
+| df (HE division) | 15 | 8.31 +- 0.38 | 12 -> 3 | 2 | 1.0e+00 | 1.0e+00 | 9.8e-01 | 9.6e-01 | 9.0e-01 |
+| df (HE division) | 31 | 10.61 +- 0.42 | 12 -> 7 | 3 | 6.2e+00 | 1.6e+00 | 9.4e-01 | 8.9e-01 | 7.8e-01 |
+| df (HE division) | 63 | 11.12 +- 0.49 | 12 -> 6 | 3 | 5.3e+01 | 3.7e+00 | 1.6e+00 | 8.7e-01 | 4.5e-01 |
+| df (HE division) | 127 | 12.09 +- 0.53 | 12 -> 5 | 3 | 8.7e+01 | 2.8e+00 | 7.4e-01 | 2.8e-01 | 1.1e-01 |
+
+Division stage of the df input (df = 1/u, invSqrt of u * df_lo then squared): time, bootstraps, MaxRE of df.
+
+| condition | time (s) | BTS | MaxRE of df |
+|---|---|---|---|
+| global | 8.02 +- 0.39 | 2 | 3.0e-04 |
+| Insurance | 5.31 +- 0.35 | 1 | 2.1e-04 |
+| Adult | 0.53 +- 0.02 | 0 | 3.5e-04 |
+| Heart | 5.00 +- 0.36 | 1 | 5.9e-05 |
+| Diabetes | 5.02 +- 0.49 | 1 | 1.3e-02 |
+| Credit | 5.30 +- 0.32 | 1 | 4.7e-03 |
+| Bank | 5.12 +- 0.42 | 1 | 7.2e-03 |
+| Wine | 5.46 +- 0.26 | 1 | 1.3e-03 |
+
+### Polynomials, case ranges, alpha = 0.05 (MaxRE over the range / at the Welch df)
+
+| input | degree | time (s) | Insurance | Adult | Heart | Diabetes | Credit | Bank | Wine |
+|---|---|---|---|---|---|---|---|---|---|
+| 1/df (stored) | 7 | 0.20 | 9.8e-04 / 6.8e-04 | 1.0e-03 / 1.0e-03 | 6.6e-04 / 6.6e-04 | 1.1e-03 / 1.1e-03 | 1.1e-03 / 1.1e-03 | 1.1e-03 / 1.1e-03 | 1.1e-03 / 1.0e-03 |
+| 1/df (stored) | 15 | 0.34 | 5.9e-07 / 1.1e-07 | 4.6e-07 / 1.7e-07 | 5.5e-07 / 1.6e-07 | 5.3e-07 / 2.0e-07 | 6.2e-07 / 1.7e-07 | 5.2e-07 / 2.5e-07 | 5.4e-07 / 1.9e-07 |
+| 1/df (stored) | 31 | 0.57 | 5.6e-07 / 2.0e-07 | 5.4e-07 / 2.0e-07 | 5.3e-07 / 2.9e-07 | 6.0e-07 / 3.0e-07 | 4.6e-07 / 1.5e-07 | 6.3e-07 / 2.2e-07 | 6.0e-07 / 2.1e-07 |
+| 1/df (range fit) | 7 | 0.18 | 7.2e-07 / 1.6e-07 | 5.1e-07 / 1.8e-07 | 5.6e-07 / 2.0e-07 | 5.3e-07 / 2.0e-07 | 5.5e-07 / 1.3e-07 | 4.6e-07 / 2.6e-07 | 4.7e-07 / 7.8e-08 |
+| 1/df (range fit) | 15 | 0.25 | 5.2e-07 / 3.0e-07 | 5.7e-07 / 1.7e-07 | 5.6e-07 / 2.0e-07 | 6.0e-07 / 2.5e-07 | 5.1e-07 / 1.9e-07 | 5.2e-07 / 2.0e-07 | 5.3e-07 / 1.4e-07 |
+| 1/df (range fit) | 31 | 0.38 | 5.5e-07 / 1.7e-07 | 5.4e-07 / 2.5e-07 | 5.6e-07 / 1.5e-07 | 5.1e-07 / 1.7e-07 | 5.4e-07 / 1.7e-07 | 5.9e-07 / 1.9e-07 | 5.4e-07 / 1.1e-07 |
+| df (HE division) | 7 | 4.99 | 7.5e-06 / 6.6e-06 | 5.2e-07 / 2.0e-07 | 5.4e-07 / 1.8e-07 | 6.8e-07 / 2.4e-07 | 5.7e-07 / 3.1e-07 | 3.2e-06 / 1.9e-06 | 8.2e-07 / 3.6e-07 |
+| df (HE division) | 15 | 5.13 | 4.8e-07 / 2.2e-07 | 5.2e-07 / 2.0e-07 | 5.1e-07 / 1.8e-07 | 5.6e-07 / 1.5e-07 | 4.7e-07 / 3.3e-07 | 4.9e-07 / 1.3e-07 | 5.0e-07 / 1.6e-07 |
+| df (HE division) | 31 | 5.26 | 4.8e-07 / 2.2e-07 | 5.2e-07 / 2.0e-07 | 5.1e-07 / 1.8e-07 | 5.6e-07 / 1.5e-07 | 4.7e-07 / 3.3e-07 | 4.9e-07 / 1.3e-07 | 5.0e-07 / 1.6e-07 |
+
+### Polynomials, case ranges, alpha = 0.001 (MaxRE over the range / at the Welch df)
+
+| input | degree | time (s) | Insurance | Adult | Heart | Diabetes | Credit | Bank | Wine |
+|---|---|---|---|---|---|---|---|---|---|
+| 1/df (stored) | 7 | 0.20 | 4.6e+01 / 3.2e+01 | 4.8e+01 / 4.8e+01 | 3.1e+01 / 3.1e+01 | 5.1e+01 / 5.1e+01 | 5.1e+01 / 5.0e+01 | 5.1e+01 / 5.0e+01 | 5.0e+01 / 4.9e+01 |
+| 1/df (stored) | 15 | 0.34 | 8.4e-04 / 9.0e-05 | 9.6e-04 / 9.5e-04 | 8.0e-04 / 1.3e-04 | 1.2e-03 / 1.2e-03 | 1.2e-03 / 1.1e-03 | 1.2e-03 / 1.1e-03 | 1.1e-03 / 1.0e-03 |
+| 1/df (stored) | 31 | 0.57 | 3.7e-05 / 2.7e-06 | 3.2e-05 / 5.9e-06 | 3.9e-05 / 4.4e-06 | 3.2e-05 / 5.9e-06 | 3.3e-05 / 5.0e-06 | 3.4e-05 / 3.9e-06 | 4.2e-05 / 7.7e-06 |
+| 1/df (range fit) | 7 | 0.18 | 1.2e-06 / 4.2e-07 | 1.2e-06 / 5.4e-07 | 1.6e-06 / 4.5e-07 | 1.3e-06 / 3.2e-07 | 1.6e-06 / 3.9e-07 | 1.4e-06 / 6.2e-07 | 1.3e-06 / 3.8e-07 |
+| 1/df (range fit) | 15 | 0.25 | 1.3e-06 / 2.6e-07 | 1.5e-06 / 4.5e-07 | 1.2e-06 / 5.0e-07 | 1.2e-06 / 4.3e-07 | 1.2e-06 / 6.6e-07 | 1.4e-06 / 4.3e-07 | 1.3e-06 / 2.7e-07 |
+| 1/df (range fit) | 31 | 0.38 | 1.1e-06 / 4.8e-07 | 1.6e-06 / 5.2e-07 | 1.2e-06 / 3.7e-07 | 1.2e-06 / 3.9e-07 | 1.4e-06 / 3.9e-07 | 1.4e-06 / 4.2e-07 | 1.2e-06 / 4.3e-07 |
+| df (HE division) | 7 | 4.99 | 1.9e-05 / 1.7e-05 | 1.3e-06 / 4.8e-07 | 1.3e-06 / 4.6e-07 | 1.7e-06 / 5.9e-07 | 1.4e-06 / 7.7e-07 | 7.8e-06 / 4.6e-06 | 2.0e-06 / 8.9e-07 |
+| df (HE division) | 15 | 5.13 | 1.2e-06 / 5.4e-07 | 1.3e-06 / 4.8e-07 | 1.3e-06 / 4.3e-07 | 1.4e-06 / 3.6e-07 | 1.2e-06 / 8.1e-07 | 1.2e-06 / 3.2e-07 | 1.2e-06 / 4.0e-07 |
+| df (HE division) | 31 | 5.26 | 1.2e-06 / 5.4e-07 | 1.3e-06 / 4.8e-07 | 1.3e-06 / 4.3e-07 | 1.4e-06 / 3.6e-07 | 1.2e-06 / 8.1e-07 | 1.2e-06 / 3.2e-07 | 1.2e-06 / 4.0e-07 |
+
+### Lookup tables in HE (one df per ciphertext; MaxRE over the points, alpha = 0.05 / 0.001)
+
+| condition | points | table | entries | ciphertexts | compare (s) | BTS | floor MaxRE | interp MaxRE | max rel. diff HE vs plain |
+|---|---|---|---|---|---|---|---|---|---|
+| global | 20 | textbook | 38 | 1 | 10.26 +- 0.63 | 4 | 2.9e+00 / 4.0e+01 | 8.2e-01 / 1.5e+01 | 3.3e-05 |
+| global | 20 | integer | 2000 | 1 | 10.20 +- 0.61 | 4 | 2.9e+00 / 4.0e+01 | 8.2e-01 / 1.5e+01 | 9.3e-05 |
+| Insurance | 4 | textbook | 38 | 1 | 9.83 +- 0.77 | 4 | 1.8e-02 / 4.4e-02 | 5.0e-05 / 2.9e-04 | 3.1e-05 |
+| Insurance | 4 | integer | 1064 | 1 | 10.16 +- 0.74 | 4 | 2.1e-05 / 5.2e-05 | 2.2e-07 / 5.5e-07 | 5.5e-07 |
+| Adult | 5 | textbook | 38 | 1 | 10.13 +- 0.61 | 4 | 1.2e-03 / 3.0e-03 | 1.2e-06 / 3.8e-05 | 3.3e-05 |
+| Adult | 5 | integer | 1024 | 1 | 10.44 +- 0.46 | 4 | 2.0e-06 / 4.9e-06 | 2.2e-07 / 4.7e-07 | 3.9e-06 |
+| Heart | 4 | textbook | 38 | 1 | 10.25 +- 0.63 | 4 | 1.2e-02 / 3.0e-02 | 5.9e-05 / 3.5e-04 | 2.5e-05 |
+| Heart | 4 | integer | 164 | 1 | 10.29 +- 0.70 | 4 | 6.2e-05 / 1.5e-04 | 1.6e-07 / 3.5e-07 | 3.4e-07 |
+| Diabetes | 4 | textbook | 38 | 1 | 10.30 +- 0.78 | 4 | 2.4e-03 / 5.8e-03 | 4.3e-07 / 2.7e-05 | 2.8e-05 |
+| Diabetes | 4 | integer | 54864 | 2 | 19.46 +- 1.16 | 4 | 8.8e-07 / 2.1e-06 | 2.0e-07 / 4.9e-07 | 2.1e-06 |
+| Credit | 4 | textbook | 38 | 1 | 10.35 +- 0.65 | 4 | 2.3e-03 / 5.7e-03 | 5.0e-07 / 2.7e-05 | 2.5e-05 |
+| Credit | 4 | integer | 23364 | 1 | 10.56 +- 0.79 | 4 | 9.0e-07 / 2.2e-06 | 1.5e-07 / 3.8e-07 | 2.2e-06 |
+| Bank | 4 | textbook | 38 | 1 | 10.07 +- 1.39 | 4 | 2.3e-03 / 5.7e-03 | 6.7e-07 / 3.0e-05 | 3.0e-05 |
+| Bank | 4 | integer | 39922 | 2 | 19.93 +- 1.08 | 4 | 1.1e-06 / 2.8e-06 | 2.1e-07 / 5.0e-07 | 2.8e-06 |
+| Wine | 4 | textbook | 38 | 1 | 10.49 +- 0.65 | 4 | 1.9e-03 / 4.7e-03 | 1.3e-06 / 3.6e-05 | 3.1e-05 |
+| Wine | 4 | integer | 4898 | 1 | 10.47 +- 0.57 | 4 | 9.8e-07 / 2.3e-06 | 2.3e-07 / 5.1e-07 | 3.4e-06 |
+
+Weighted slot sum per output (one alpha, one mapping): 0.16 s on average.
+
+### Observations
+
+- The stored 1/df polynomial (degree 15) takes 0.33 s with no bootstrap and stays at the CKKS noise level (MaxRE <= 1.4e-6
+  for alpha >= 0.01) on the global range and on every case range, including df > 2000 (Adult, Diabetes, Credit, Bank, Wine:
+  <= 6.2e-7 at alpha = 0.05). At alpha = 0.001 its error is the polynomial error (9.5e-4 to 1.2e-3; degree 31: 2.8e-5 to
+  4.2e-5).
+- The df input needs a division in HE: 5 to 8 s and 1 to 2 bootstraps, about 25 times the cost of the 1/df polynomial. The
+  computed df carries a relative error up to 1.3e-2 for large df (the absolute input noise 1.8e-7 is large relative to
+  u = 1/df), which the flat c^2 at large df absorbs. On the global range the df polynomial fails as in plaintext (MaxRE
+  0.11 to 87 up to degree 127). On the case ranges it reaches the noise level from degree 15 (<= 5.6e-7 at alpha = 0.05,
+  <= 1.4e-6 at alpha = 0.001); at degree 7 it is less accurate (Insurance 7.5e-6, Bank 3.2e-6).
+- On the same case range, the 1/df polynomial reaches the noise level from degree 7 (<= 7.2e-7 at alpha = 0.05, <= 1.6e-6
+  at alpha = 0.001) in 0.18 s, i.e. the same accuracy as the df input without the division.
+- Lookup tables cost one composite sign per table: 10 s and 4 bootstraps (about 20 s for the integer tables of Diabetes
+  and Bank, which need 2 ciphertexts); the weighted sum adds 0.16 s per output. The HE values agree with the plaintext
+  lookup (relative difference <= 9.3e-5), so the accuracy is that of the table: on the global range floor and
+  interpolation fail at df < 2 (MaxRE 2.9 and 0.82 at alpha = 0.05; df >= 30: integer interpolation 6.6e-7); on the case
+  ranges integer-table interpolation reaches the noise level (<= 2.3e-7 at alpha = 0.05), integer floor <= 6.2e-5,
+  textbook interpolation <= 5.9e-5 and textbook floor 4.3e-4 to 1.8e-2.
