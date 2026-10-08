@@ -43,5 +43,80 @@
     "n1": 1024,
     "n2": 1024,
     "R": 90.0
+  },
+  "heart_chol_disease/welch": {
+    "n1": 139,
+    "n2": 164,
+    "R": 564.0
+  },
+  "heart_chol_disease/f": {
+    "n1": 139,
+    "n2": 164,
+    "R": 564.0
+  },
+  "heart_chol_disease/z": {
+    "n1": 139,
+    "n2": 164,
+    "R": 564.0
+  },
+  "diabetes_labs_readmitted/welch": {
+    "n1": 11357,
+    "n2": 54864,
+    "R": 131.0
+  },
+  "diabetes_labs_readmitted/f": {
+    "n1": 11357,
+    "n2": 54864,
+    "R": 131.0
+  },
+  "diabetes_labs_readmitted/z": {
+    "n1": 11357,
+    "n2": 54864,
+    "R": 131.0
+  },
+  "credit_limit_default/welch": {
+    "n1": 6636,
+    "n2": 23364,
+    "R": 100.0
+  },
+  "credit_limit_default/f": {
+    "n1": 6636,
+    "n2": 23364,
+    "R": 100.0
+  },
+  "credit_limit_default/z": {
+    "n1": 6636,
+    "n2": 23364,
+    "R": 100.0
+  },
+  "bank_age_subscribed/welch": {
+    "n1": 5289,
+    "n2": 39922,
+    "R": 95.0
+  },
+  "bank_age_subscribed/f": {
+    "n1": 5289,
+    "n2": 39922,
+    "R": 95.0
+  },
+  "bank_age_subscribed/z": {
+    "n1": 5289,
+    "n2": 39922,
+    "R": 95.0
+  },
+  "wine_alcohol_color/welch": {
+    "n1": 1599,
+    "n2": 4898,
+    "R": 149.0
+  },
+  "wine_alcohol_color/f": {
+    "n1": 1599,
+    "n2": 4898,
+    "R": 149.0
+  },
+  "wine_alcohol_color/z": {
+    "n1": 1599,
+    "n2": 4898,
+    "R": 149.0
   }
 }

@@ -23,7 +23,7 @@ Lookup tables (degree-independent):
 - textbook_interp: same grid plus df = infinity (normal quantile), linear
                    interpolation of c^2 in 1/df;
 - integer_floor / integer_round : every integer df, floor / round of df;
-- integer_interp : every integer df (up to 4096, covering every case range),
+- integer_interp : every integer df up to the largest df of all ranges,
                    linear interpolation of c^2 in 1/df.
 
 For the global condition, MaxRE is also reported per df band
@@ -132,10 +132,11 @@ def ranges():
 def run_plain(out_dir):
 
     table_df = textbook_df_grid()
-    integer_df = np.arange(1.0, 4097.0)
+    all_ranges = ranges()
+    integer_df = np.arange(1.0, max(hi for _, hi in all_ranges.values()) + 1.0)
     rows = []
 
-    for range_name, (lo, hi) in ranges().items():
+    for range_name, (lo, hi) in all_ranges.items():
         df = df_grid(lo, hi)
         u = 1.0 / df
 
