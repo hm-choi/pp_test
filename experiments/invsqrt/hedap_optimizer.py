@@ -9,8 +9,8 @@ Chebyshev + i_max Newton iterations records the MRE and the accumulated
 runtime after each iteration. The optimal iteration per (l, d, c) and the
 optimal (d, c, i) per level are then chosen as in HE-DAP.
 
-Domains (see domains.py): x = V in [1e-3, V_max] with the Welch V_max from
-the public bounds of each dataset comparison.
+Domain (see domains.py): x = V / V_max in [V_BAR_MIN, 1] (Welch's t-test),
+shared by every dataset comparison.
 
 Differences from the Lattigo reference code:
 - degree is 2^d - 1 (pp_test coefficients) instead of 2^d - 2;
@@ -46,12 +46,14 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
+sys.path.append(str(PROJECT_ROOT / "experiments"))
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from engine.HEengine import HEengine
 from engine.HEdata import Message
 from operators.HEapprox import HEApprox
 
+from common.he_utils import open_append
 from domains import get_domains
 
 
@@ -180,25 +182,6 @@ def get_opt_iter(approx, ctxt, ans, domain, log_degree, pre_bts, i_max=I_MAX):
         })
 
     return rows
-
-
-def open_append(path, fields):
-
-    # Append-mode CSV writer; drops a partial last line left by a hard kill.
-    if path.is_file():
-        data = path.read_bytes()
-
-        if data and not data.endswith(b"\n"):
-            path.write_bytes(data[:data.rfind(b"\n") + 1])
-
-    new_file = not path.is_file() or path.stat().st_size == 0
-    file = path.open("a", newline="")
-    writer = csv.DictWriter(file, fieldnames=fields)
-
-    if new_file:
-        writer.writeheader()
-
-    return file, writer
 
 
 def load_raw(raw_path):

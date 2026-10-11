@@ -13,9 +13,9 @@ from coeffs.t_critical_coeffs import (
 )
 
 
-# Lower bound of the inverse square root input (Welch V).
-# The upper bound is the public bound derived from R and the group sizes.
-INV_SQRT_V_MIN = 1e-3
+# Lower bound of the normalized Welch variance V / V_max (public assumption),
+# i.e. the inverse square root input domain is [V_BAR_MIN, 1].
+V_BAR_MIN = 1e-2
 
 # Inverse square root configuration.
 #
@@ -100,7 +100,8 @@ class HEHypothesisTesting:
         R: float,
     ):
 
-        # For x in [0, R], the unbiased sample variance satisfies
+        # For x in a public interval [L, U] with R = U - L, the unbiased
+        # sample variance satisfies
         #
         # s_i^2 <= (n_i / (n_i - 1)) * R^2 / 4,
         #
@@ -113,8 +114,21 @@ class HEHypothesisTesting:
         R: float,
     ):
 
-        # Public upper bound of the unbiased sample variance for x in [0, R].
+        # Public upper bound of the unbiased sample variance for x in [L, U],
+        # R = U - L.
         return n / (n - 1) * R ** 2 / 4.0
+
+    @staticmethod
+    def welch_d_max(
+        n1: int,
+        n2: int,
+        R: float,
+    ):
+
+        # A_i = s_i^2 / n_i <= R^2 / (4 (n_i - 1)), so
+        # D = A1^2 / (n1 - 1) + A2^2 / (n2 - 1)
+        #   <= R^4 / 16 * (1/(n1-1)^3 + 1/(n2-1)^3).
+        return (R ** 4 / 16.0) * (1.0 / (n1 - 1) ** 3 + 1.0 / (n2 - 1) ** 3)
 
     @classmethod
     def check_inv_sqrt_domain(
@@ -125,20 +139,19 @@ class HEHypothesisTesting:
     ):
 
         # Plaintext check of the inverse square root input domain of Welch's
-        # t-test, V = s1^2 / n1 + s2^2 / n2 in [INV_SQRT_V_MIN, V_max], run on
-        # the data before encryption.
+        # t-test, V / V_max in [V_BAR_MIN, 1], run on the data before
+        # encryption.
         #
-        # Returns V; raises ValueError outside the domain.
+        # Returns V / V_max; raises ValueError outside the domain.
         x1 = np.asarray(x1, dtype=np.float64)
         x2 = np.asarray(x2, dtype=np.float64)
         n1, n2 = len(x1), len(x2)
 
-        value = np.var(x1, ddof=1) / n1 + np.var(x2, ddof=1) / n2
-        upper = cls.welch_v_max(n1, n2, R)
+        value = (np.var(x1, ddof=1) / n1 + np.var(x2, ddof=1) / n2) / cls.welch_v_max(n1, n2, R)
 
-        if not INV_SQRT_V_MIN <= value <= upper:
+        if not V_BAR_MIN <= value <= 1.0:
             raise ValueError(
-                f"invSqrt input {value:.6g} outside [{INV_SQRT_V_MIN:g}, {upper:.6g}]"
+                f"V / V_max = {value:.6g} outside [{V_BAR_MIN:g}, 1]"
             )
 
         return float(value)
@@ -152,12 +165,12 @@ class HEHypothesisTesting:
         inv_df: Ciphertext,
         alpha: float,
         log_degree: int,
-        scale=1.0,
+        min_output_level=0,
     ):
 
-        # P(u) ~ t_{1-alpha/2, 1/u}^2 (squared two-sided t critical value).
-        # The returned value is scale * P(u) (scale is folded into the
-        # coefficients, so it costs no level).
+        # P(z) ~ t_{1-alpha/2, 1/u}^2 (squared two-sided t critical value) on
+        # the normalized InvDF z. The input is bootstrapped beforehand when
+        # needed so that the output keeps at least `min_output_level` levels.
         degree = 2 ** log_degree - 1
         table = _T_CRITICAL_SQ_COEFFS
 
@@ -186,8 +199,7 @@ class HEHypothesisTesting:
         if len(coeffs_arr) < 2 or not np.all(np.isfinite(coeffs_arr)):
             raise ValueError("Critical-value coefficients must be finite")
 
-        # InvDF = 1 / df with df in [1, 2000], so
-        # InvDF lies in [1/2000, 1].
+        # InvDF = 1 / df with df >= 1, so InvDF lies in [0, 1].
         u_min = _T_CRITICAL_U_MIN
         u_max = _T_CRITICAL_U_MAX
 
@@ -204,9 +216,13 @@ class HEHypothesisTesting:
             (u_max + u_min) / (u_max - u_min),
         )
 
-        self.approx._ensure_cheb_level(z, degree)
+        # The Chebyshev evaluation consumes log_degree levels.
+        if z.level() < log_degree + min_output_level:
+            self.approx._bootstrap(z)
+        else:
+            self.approx._ensure_cheb_level(z, degree)
 
-        coeffs = self.engine._make_cheb_coeffs(coeffs_arr * scale)
+        coeffs = self.engine._make_cheb_coeffs(coeffs_arr)
 
         return self.engine.evaluate_chebyshev(z, coeffs)
 
@@ -223,69 +239,48 @@ class HEHypothesisTesting:
 
         return float(np.polynomial.chebyshev.chebval(z, coeffs))
 
-    def _HE_population_variance(
+    def _HE_sample_variance(
         self,
         x: Ciphertext,
         n: int,
     ):
 
-        # Population variance
-        #
-        # M = sum(x_i^2) / n - (sum(x_i) / n)^2,
-        #
-        # so that the unbiased sample variance is s^2 = n / (n - 1) * M.
-        s = self.engine.sum(x)
+        # mean = Sum(x) / n, Q = Sum(x * x) and the unbiased sample variance
+        # s^2 = Q / (n - 1) - mean^2 * n / (n - 1).
+        mean = self.engine.mult(self.engine.sum(x), 1.0 / n)
         q = self.engine.sum(self.engine.mult(x, x))
 
-        mean = self.engine.mult(s, 1.0 / n)
-        mean_sq = self.engine.mult(q, 1.0 / n)
+        var = self.engine.sub(
+            self.engine.mult(q, 1.0 / (n - 1)),
+            self.engine.mult(self.engine.mult(mean, mean), n / (n - 1)),
+        )
 
-        return self.engine.sub(mean_sq, self.engine.mult(mean, mean))
+        return mean, var
 
-    def _inv_sqrt_from_terms(
+    def _inv_sqrt(
         self,
-        terms,
-        v_max: float,
+        v_bar: Ciphertext,
         min_level: int,
     ):
 
-        # Approximate 1 / sqrt(V) for
-        #
-        # V = sum_i factor_i * ctxt_i,  V in [INV_SQRT_V_MIN, v_max].
-        #
-        # The factors are applied directly to ctxt_i to avoid additional
-        # ciphertext-scalar multiplications after forming V. The output is
-        # refreshed (extended bootstrap, |y| <= 1 / sqrt(INV_SQRT_V_MIN))
-        # when its level is below `min_level`.
-        lo, hi = INV_SQRT_V_MIN, v_max
+        # Approximate 1 / sqrt(V_bar) for V_bar in [V_BAR_MIN, 1]. The output
+        # (|y| <= 1 / sqrt(V_BAR_MIN)) is refreshed with the extended
+        # bootstrap when its level is below `min_level`.
+        lo, hi = V_BAR_MIN, 1.0
 
-        if hi <= lo:
-            raise ValueError("v_max must be greater than INV_SQRT_V_MIN")
-
-        def combine(scale, shift=0.0):
-            ret = None
-
-            for ctxt, factor in terms:
-                part = self.engine.mult(ctxt, factor * scale)
-                ret = part if ret is None else self.engine.add(ret, part)
-
-            if shift != 0.0:
-                ret = self.engine.sub(ret, shift)
-
-            return ret
-
-        # First input for Newton iteration: V / 2.
-        x_half = combine(0.5)
+        # First input for Newton iteration: V_bar / 2.
+        x_half = self.engine.mult(v_bar, 0.5)
 
         # Second input for the Chebyshev approximation:
-        # map V from [lo, hi] to [-1, 1].
-        x_cheb = combine(2.0 / (hi - lo), (hi + lo) / (hi - lo))
+        # map V_bar from [lo, hi] to [-1, 1].
+        x_cheb = self.engine.mult(v_bar, 2.0 / (hi - lo))
+        x_cheb = self.engine.sub(x_cheb, (hi + lo) / (hi - lo))
 
         cfg = self.invsqrt
 
         if "select" in cfg:
-            # Keyed by the HE-DAP input level l, i.e. the level of V before
-            # the one-level mapping (x_cheb is at level l - 1).
+            # Keyed by the HE-DAP input level l, i.e. the level of V_bar
+            # before the one-level mapping (x_cheb is at level l - 1).
             log_degree, iteration, pre_bts = cfg["select"][x_cheb.level() + 1]
         else:
             log_degree, iteration, pre_bts = cfg["log_degree"], cfg["iteration"], cfg["pre_bts"]
@@ -335,99 +330,72 @@ class HEHypothesisTesting:
 
         # Encrypted quantities shared by every significance level:
         #
-        # inv_df   = 1 / df (Welch-Satterthwaite),
-        # delta_sq = (mean1 - mean2)^2,
-        # v        = V = s1^2 / n1 + s2^2 / n2,
-        # inv_v    = 1 / V (used by HE_Welch_t_squared),
+        # t      = T, the Welch t statistic,
+        # inv_df = 1 / df (Welch-Satterthwaite),
         #
         # together with the public values used by the decision.
         self._check_public(n1, n2, R, "Welch t-test")
 
         v_max = self.welch_v_max(n1, n2, R)
-
-        # Population variances M_i; a_i = s_i^2 / n_i = M_i / (n_i - 1).
-        m1 = self._HE_population_variance(x1, n1)
-        m2 = self._HE_population_variance(x2, n2)
+        d_max = self.welch_d_max(n1, n2, R)
 
         # --------------------------------------------------------------
-        # Inverse square root of V
+        # Welch t statistic
         # --------------------------------------------------------------
 
-        # Level 7 is needed for 1/V, 1/V^2, 1/df and the critical-value
-        # mapping (bootstrapped at level >= 3 before the Chebyshev
-        # evaluation).
-        inv_sqrt_v = self._inv_sqrt_from_terms(
-            [
-                (m1, 1.0 / (n1 - 1)),
-                (m2, 1.0 / (n2 - 1)),
-            ],
-            v_max,
-            7,
-        )
-        self._trace(trace, "inv_sqrt_v", inv_sqrt_v)
+        # Means, unbiased sample variances and A_i = s_i^2 / n_i.
+        mean1, var1 = self._HE_sample_variance(x1, n1)
+        mean2, var2 = self._HE_sample_variance(x2, n2)
 
-        # Square once to obtain 1 / V.
-        inv_v = self.engine.mult(inv_sqrt_v, inv_sqrt_v)
+        a1 = self.engine.mult(var1, 1.0 / n1)
+        a2 = self.engine.mult(var2, 1.0 / n2)
+
+        # V = A1 + A2, normalized by the public bound: V_bar = V / V_max.
+        v = self.engine.add(a1, a2)
+        v_bar = self.engine.mult(v, 1.0 / v_max)
+
+        # Y = 1 / sqrt(V_bar). Level 9 is needed for 1/V_bar, 1/V_bar^2,
+        # 1/df and the critical-value mapping (bootstrapped at level >= 3
+        # before the Chebyshev evaluation).
+        y = self._inv_sqrt(v_bar, 9)
+        self._trace(trace, "inv_sqrt_v_bar", y)
+
+        # T = (mean1 - mean2) / sqrt(V_max) * Y.
+        u = self.engine.mult(self.engine.sub(mean1, mean2), 1.0 / np.sqrt(v_max))
+        t = self.engine.mult(u, y)
+        self._trace(trace, "t", t)
 
         # --------------------------------------------------------------
         # Welch-Satterthwaite degrees of freedom
         # --------------------------------------------------------------
 
-        # D = a1^2 / (n1 - 1) + a2^2 / (n2 - 1), where
-        #
-        # a_i / sqrt(n_i - 1) = M_i / (n_i - 1)^(3/2).
-        d1_base = self.engine.mult(m1, 1.0 / (n1 - 1) ** 1.5)
-        d2_base = self.engine.mult(m2, 1.0 / (n2 - 1) ** 1.5)
+        # D = A1^2 / (n1 - 1) + A2^2 / (n2 - 1), normalized by the public
+        # bound: D_bar = D / D_max in [0, 1]. The constants 1 / (n_i - 1) and
+        # 1 / D_max are applied as one constant per term (one level).
+        d1 = self.engine.mult(self.engine.mult(a1, a1), 1.0 / ((n1 - 1) * d_max))
+        d2 = self.engine.mult(self.engine.mult(a2, a2), 1.0 / ((n2 - 1) * d_max))
+        d_bar = self.engine.add(d1, d2)
+        self.approx.ensure_level(d_bar, 7, 1.0)
 
-        d1 = self.engine.mult(d1_base, d1_base)
-        d2 = self.engine.mult(d2_base, d2_base)
+        # 1 / V_bar = Y^2, 1 / V_bar^2 and
+        # 1 / df = D / V^2 = D_bar / V_bar^2 * D_max / V_max^2.
+        inv_v_bar = self.engine.mult(y, y)
+        inv_v_bar_sq = self.engine.mult(inv_v_bar, inv_v_bar)
 
-        d = self.engine.add(d1, d2)
-
-        # Compute 1 / V^2. (No bootstrap here: 1 / V^2 is not bounded by 1;
-        # the critical-value input z in [-1, 1] is bootstrapped instead.)
-        inv_v_squared = self.engine.mult(inv_v, inv_v)
-
-        # 1 / df = D / V^2.
-        inv_df = self.engine.mult(d, inv_v_squared)
+        inv_df = self.engine.mult(
+            self.engine.mult(d_bar, inv_v_bar_sq),
+            d_max / v_max ** 2,
+        )
         self._trace(trace, "inv_df", inv_df)
 
-        # --------------------------------------------------------------
-        # Decision terms
-        # --------------------------------------------------------------
-
-        mean1 = self.engine.mult(self.engine.sum(x1), 1.0 / n1)
-        mean2 = self.engine.mult(self.engine.sum(x2), 1.0 / n2)
-
-        delta = self.engine.sub(mean1, mean2)
-        self._trace(trace, "mean_diff", delta)
-
-        delta_sq = self.engine.mult(delta, delta)
-
-        v = self.engine.add(
-            self.engine.mult(m1, 1.0 / (n1 - 1)),
-            self.engine.mult(m2, 1.0 / (n2 - 1)),
-        )
-
         return {
+            "t": t,
             "inv_df": inv_df,
-            "delta_sq": delta_sq,
-            "v": v,
-            "inv_v": inv_v,
             "R": R,
             "v_max": v_max,
             "n1": n1,
             "n2": n2,
         }
-
-    def HE_Welch_t_squared(
-        self,
-        stats,
-    ):
-
-        # T^2 = (mean1 - mean2)^2 / V (reporting; the decision does not
-        # use T^2).
-        return self.engine.mult(stats["delta_sq"], stats["inv_v"])
 
     def welch_score_bound(
         self,
@@ -439,15 +407,17 @@ class HEHypothesisTesting:
         critical_log_degree=4,
     ):
 
-        # Public bound of |s| with s = (mean1 - mean2)^2 - c^2 V:
-        # 0 <= (mean1 - mean2)^2 <= R^2, 0 <= V <= v_max, c^2 <= c_max^2.
-        # The Welch-Satterthwaite df is at least min(n1, n2) - 1, so c_max^2 is
-        # the critical-value polynomial at u = 1 / (min(n1, n2) - 1).
+        # Public bound of |s| with s = T^2 - c^2:
+        # T^2 = (mean1 - mean2)^2 / V <= R^2 / (V_BAR_MIN * V_max) and
+        # c^2 <= c_max^2. The Welch-Satterthwaite df is at least
+        # min(n1, n2) - 1, so c_max^2 is the critical-value polynomial at
+        # u = 1 / (min(n1, n2) - 1) (the polynomials of degree >= 15 are
+        # positive and increasing in u on [0, 1]).
         c_max_sq = self.critical_value_sq_plain(
             1.0 / (min(n1, n2) - 1), alpha, critical_log_degree,
         )
 
-        return max(R ** 2, c_max_sq * v_max)
+        return max(R ** 2 / (V_BAR_MIN * v_max), c_max_sq)
 
     def welch_score(
         self,
@@ -457,13 +427,9 @@ class HEHypothesisTesting:
         trace=None,
     ):
 
-        # Returns s / B (encrypted) with the decision score
-        #
-        # s = (mean1 - mean2)^2 - c^2 V = V (T^2 - c^2),
-        #
-        # which is positive exactly when T^2 > c^2 (V > 0), and the public
-        # bound B = welch_score_bound(...). The normalization 1 / B is folded
-        # into the critical-value coefficients.
+        # Returns s / B (encrypted) with the decision score s = T^2 - c^2,
+        # positive exactly when the null hypothesis is rejected, and the
+        # public bound B = welch_score_bound(...).
         bound = self.welch_score_bound(
             stats["R"], stats["v_max"], alpha, stats["n1"], stats["n2"],
             critical_log_degree,
@@ -472,18 +438,25 @@ class HEHypothesisTesting:
         if trace is not None:
             trace["score_bound"] = bound
 
-        critical_scaled = self._critical_value_from_inv_df(
+        # c^2 keeps 5 levels: T^2 - c^2 is not bootstrappable before the
+        # normalization (|T^2 - c^2| <= B), and multiplying by a small 1 / B
+        # takes up to two levels before StepHE (input level >= 3).
+        critical_sq = self._critical_value_from_inv_df(
             stats["inv_df"],
             alpha,
             critical_log_degree,
+            min_output_level=5,
+        )
+        self._trace(trace, "critical_sq", critical_sq)
+
+        t_sq = self.engine.mult(stats["t"], stats["t"])
+        self._trace(trace, "t_sq", t_sq)
+
+        # s / B = (T^2 - c^2) / B.
+        normalized_score = self.engine.mult(
+            self.engine.sub(t_sq, critical_sq),
             1.0 / bound,
         )
-        self._trace(trace, "critical_scaled", critical_scaled)
-
-        # s / B = (mean1 - mean2)^2 / B - (c^2 / B) V.
-        delta_sq_scaled = self.engine.mult(stats["delta_sq"], 1.0 / bound)
-        cv = self.engine.mult(critical_scaled, stats["v"])
-        normalized_score = self.engine.sub(delta_sq_scaled, cv)
         self._trace(trace, "score_normalized", normalized_score)
 
         return normalized_score
@@ -531,13 +504,13 @@ class HEHypothesisTesting:
         R: float,
     ):
 
-        # Encrypted population variances M_1, M_2 (s_i^2 = n_i / (n_i - 1) M_i)
-        # with the public values used by the decision.
+        # Encrypted unbiased sample variances s_1^2, s_2^2 with the public
+        # values used by the decision.
         self._check_public(n1, n2, R, "F-test")
 
         return {
-            "m1": self._HE_population_variance(x1, n1),
-            "m2": self._HE_population_variance(x2, n2),
+            "var1": self._HE_sample_variance(x1, n1)[1],
+            "var2": self._HE_sample_variance(x2, n2)[1],
             "n1": n1,
             "n2": n2,
             "R": R,
@@ -600,10 +573,9 @@ class HEHypothesisTesting:
             trace["score_bound"] = m_lower * m_upper
 
         def factor(critical, m):
-            # (s1^2 - critical * s2^2) / m with s_i^2 = n_i / (n_i - 1) * M_i.
-            a = self.engine.mult(stats["m1"], n1 / (n1 - 1) / m)
-            b = self.engine.mult(stats["m2"], critical * n2 / (n2 - 1) / m)
-            return self.engine.sub(a, b)
+            # (s1^2 - critical * s2^2) / m.
+            b = self.engine.sub(stats["var1"], self.engine.mult(stats["var2"], critical))
+            return self.engine.mult(b, 1.0 / m)
 
         normalized_score = self.engine.mult(
             factor(lower_critical, m_lower),

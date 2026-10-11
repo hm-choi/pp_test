@@ -4,8 +4,8 @@ Target: the squared two-sided t critical value c^2 = t_{1-alpha/2, df}^2,
 reference SciPy `t.ppf`, error = relative error (MaxRE, MRE).
 
 Plaintext part (--part plain). Every method is evaluated under two df-range
-conditions, each with its own evaluation grid (log-spaced df plus every
-integer df in the range):
+conditions, each with its own evaluation grid of EVAL_POINTS df (log-spaced
+over the range, plus the Welch df of the cases for a case range):
 - global : df in [1, 2000];
 - case   : df in [min(n1, n2) - 1, n1 + n2 - 2] for each dataset case (the
            Welch-Satterthwaite df always lies in this public range).
@@ -13,7 +13,7 @@ integer df in the range):
 Polynomial methods (Chebyshev interpolation, degrees 2^3-1 .. 2^7-1, fitted on
 the same range they are evaluated on):
 - invdf : input u = 1/df (the global fit is the stored coefficient table,
-          coeffs/t_critical_coeffs.py);
+          coeffs/t_critical_coeffs.py, fitted on u in [0, 1], i.e. df >= 1);
 - df    : input df.
 
 Lookup tables (degree-independent):
@@ -29,12 +29,13 @@ Lookup tables (degree-independent):
 For the global condition, MaxRE is also reported per df band
 (1-2, 2-10, 10-30, 30-2000).
 
-HE part (--part he). The same df points and df-range conditions (global and
-one per distinct case range), encrypted u = 1/df at level 12, `--reps`
-repetitions; runtime, bootstraps, levels, relative error against the exact
-quantile and absolute error against the same method in plaintext:
+HE part (--part he). The same df points (two ciphertexts of 32768 slots) and
+df-range conditions (global and one per distinct case range), encrypted
+u = 1/df at level 12, `--reps` repetitions; runtime, bootstraps, levels,
+relative error against the exact quantile and absolute error against the
+same method in plaintext:
 - invdf : HEHypothesisTesting._critical_value_from_inv_df (stored coefficients,
-          for every condition), every slot one df (results/he_raw.csv);
+          for every condition) (results/he_raw.csv);
 - invdf_range : 1/df polynomial refitted on the case range (case conditions);
 - df    : df = 1/u in HE (invSqrt of u * df_lo, squared), then the df
           polynomial fitted on the condition range (results/he_raw.csv,
@@ -49,8 +50,8 @@ quantile and absolute error against the same method in plaintext:
           (results/he_lookup_raw.csv).
 
 Run (inside the HEaaN container, cwd = project root):
-    python3 experiments/tcrit/tcrit_experiment.py --part plain
-    python3 experiments/tcrit/tcrit_experiment.py --part he [--methods poly,lookup]
+    python3 experiments/critical_boundary/run_critical_boundary.py --part plain
+    python3 experiments/critical_boundary/run_critical_boundary.py --part he [--methods poly,lookup]
 """
 
 import argparse
@@ -79,7 +80,8 @@ ALPHAS = [0.001, 0.01, 0.025, 0.05, 0.1]
 LOG_DEGREES = range(3, 8)  # degree = 2^3-1, ..., 2^7-1
 DF_MIN, DF_MAX = 1.0, 2000.0
 DF_BANDS = [(1.0, 2.0), (2.0, 10.0), (10.0, 30.0), (30.0, 2000.0)]
-REPS = 10
+REPS = 2
+EVAL_POINTS = 65536  # two ciphertexts of 32768 slots
 
 # HE part.
 LOOKUP_POINTS = {"global": 20, "case": 3}
@@ -95,13 +97,6 @@ def exact_sq(alpha, df):
     return stats.t.ppf(1.0 - alpha / 2.0, df) ** 2
 
 
-def df_grid(lo, hi, n=20001):
-
-    # Log-spaced df plus every integer df in [lo, hi].
-    return np.unique(np.concatenate([
-        np.geomspace(lo, hi, n),
-        np.arange(math.ceil(lo), math.floor(hi) + 1, dtype=np.float64),
-    ]))
 
 
 def textbook_df_grid():
@@ -137,27 +132,16 @@ def errors(y, y_true):
     return float(re.max()), float(re.mean())
 
 
-def ranges():
-
-    from pptest_cases import load_cases
-
-    out = {"global": (DF_MIN, DF_MAX)}
-
-    for name, case in load_cases().items():
-        out[name] = (float(min(case["n1"], case["n2"]) - 1), float(case["n1"] + case["n2"] - 2))
-
-    return out
-
-
 def run_plain(out_dir):
 
     table_df = textbook_df_grid()
-    all_ranges = ranges()
-    integer_df = np.arange(1.0, max(hi for _, hi in all_ranges.values()) + 1.0)
+    conditions = he_conditions()
+    integer_df = np.arange(1.0, max(c["range"][1] for c in conditions.values()) + 1.0)
     rows = []
 
-    for range_name, (lo, hi) in all_ranges.items():
-        df = df_grid(lo, hi)
+    for range_name, condition in conditions.items():
+        lo, hi = condition["range"]
+        df = eval_grid(condition)[0]
         u = 1.0 / df
 
         for alpha in ALPHAS:
@@ -216,7 +200,7 @@ def he_conditions():
 
     # Global range and every distinct case range, with the Welch df of the
     # cases sharing that range (Adult: both comparisons).
-    from pptest_cases import load_cases
+    from common.cases import load_cases
 
     out = {"global": {"range": (DF_MIN, DF_MAX), "welch": {}}}
 
@@ -231,11 +215,12 @@ def he_conditions():
     return out
 
 
-def poly_grid(condition, num_slots):
+def eval_grid(condition):
 
+    # EVAL_POINTS df: log-spaced over the range plus the Welch df of the cases.
     lo, hi = condition["range"]
     welch = np.array(sorted(condition["welch"].values()))
-    return np.concatenate([np.geomspace(lo, hi, num_slots - len(welch)), welch]), welch
+    return np.concatenate([np.geomspace(lo, hi, EVAL_POINTS - len(welch)), welch]), welch
 
 
 def lookup_points(name, condition):
@@ -273,7 +258,7 @@ def lookup_table(alpha, knot_df, with_infinity):
     return u, {"floor": (float(f[0]), floor_w), "interp": (float(f_all[0]), interp_w)}
 
 
-def run_he_poly(engine, ht, conditions, reps, path):
+def run_he_poly(engine, ht, conditions, reps, path, alphas):
 
     from engine.HEdata import Ciphertext, Message
 
@@ -284,11 +269,11 @@ def run_he_poly(engine, ht, conditions, reps, path):
 
     for name, condition in conditions.items():
         lo, hi = condition["range"]
-        df, welch = poly_grid(condition, engine.num_slots)
+        df, welch = eval_grid(condition)
         u = 1.0 / df
         welch_mask = np.isin(df, welch)
         z_inv = 2.0 * (u - _T_CRITICAL_U_MIN) / (_T_CRITICAL_U_MAX - _T_CRITICAL_U_MIN) - 1.0
-        dec = lambda c: np.array(engine.dec(c)[0], dtype=np.complex128).real[:len(df)]
+        dec = lambda c: np.concatenate([np.array(m, dtype=np.complex128).real for m in engine.dec(c)])[:len(df)]
 
         def add(method, degree, alpha, rep, y, y_plain, **kw):
             y_true = exact_sq(alpha, df)
@@ -304,7 +289,7 @@ def run_he_poly(engine, ht, conditions, reps, path):
             for ld in LOG_DEGREES:
                 degree = 2 ** ld - 1
 
-                for alpha in ALPHAS:
+                for alpha in alphas:
                     ctxt = engine.enc(Message(u, engine.log_slots), level=12)
                     ht.reset_bootstrap_count()
                     start = time.perf_counter()
@@ -320,7 +305,7 @@ def run_he_poly(engine, ht, conditions, reps, path):
                 for ld in LOG_DEGREES:
                     degree = 2 ** ld - 1
 
-                    for alpha in ALPHAS:
+                    for alpha in alphas:
                         p = Chebyshev.interpolate(lambda v: exact_sq(alpha, 1.0 / v), degree, domain=[1.0 / hi, 1.0 / lo])
                         ctxt = engine.enc(Message(u, engine.log_slots), level=12)
                         ht.reset_bootstrap_count()
@@ -348,7 +333,7 @@ def run_he_poly(engine, ht, conditions, reps, path):
             for ld in LOG_DEGREES:
                 degree = 2 ** ld - 1
 
-                for alpha in ALPHAS:
+                for alpha in alphas:
                     p = Chebyshev.interpolate(lambda d: exact_sq(alpha, d), degree, domain=[lo, hi])
                     zc = Ciphertext(z)
                     ht.reset_bootstrap_count()
@@ -363,8 +348,13 @@ def run_he_poly(engine, ht, conditions, reps, path):
 
             g = [r for r in rows if r["condition"] == name and r["rep"] == rep]
             print(f"{name} rep={rep} nu: {nu_time:.2f}s MaxRE={nu_max_re:.1e} | "
-                  + " ".join(f"{m}15 a=0.05 {next(r['max_re'] for r in g if r['method'] == m and r['degree'] == 15 and r['alpha'] == 0.05):.1e}"
+                  + " ".join(f"{m}15 a={alphas[-1]} {next(r['max_re'] for r in g if r['method'] == m and r['degree'] == 15 and r['alpha'] == alphas[-1]):.1e}"
                              for m in ["invdf", "df"]), flush=True)
+
+    if set(alphas) != set(ALPHAS) and path.is_file():
+        # Keep the stored rows of the other alphas.
+        with path.open() as file:
+            rows = [r for r in csv.DictReader(file) if float(r["alpha"]) not in alphas] + rows
 
     write_csv(path, fields, rows)
 
@@ -488,17 +478,17 @@ def write_csv(path, fields, rows):
     print(f"saved {path}")
 
 
-def run_he(out_dir, reps, methods):
+def run_he(out_dir, reps, methods, alphas):
 
-    from engine.HEengine import HEengine
+    from common.he_utils import make_engine
     from operators.HEhypo_test import HEHypothesisTesting
 
-    engine = HEengine(device_type="cpu", setting_root="/heaan_setting/")
+    engine = make_engine()
     ht = HEHypothesisTesting(engine)
     conditions = he_conditions()
 
     if "poly" in methods:
-        run_he_poly(engine, ht, conditions, reps, out_dir / "he_raw.csv")
+        run_he_poly(engine, ht, conditions, reps, out_dir / "he_raw.csv", alphas)
 
     if "lookup" in methods:
         run_he_lookup(engine, ht, conditions, reps, out_dir / "he_lookup_raw.csv")
@@ -510,6 +500,7 @@ def main():
     parser.add_argument("--part", choices=["plain", "he"], required=True)
     parser.add_argument("--reps", type=int, default=REPS)
     parser.add_argument("--methods", default="poly,lookup")
+    parser.add_argument("--alphas", default="all")
     parser.add_argument("--out-dir", type=Path, default=RESULT_DIR)
     args = parser.parse_args()
 
@@ -518,7 +509,8 @@ def main():
     if args.part == "plain":
         run_plain(args.out_dir)
     else:
-        run_he(args.out_dir, args.reps, args.methods.split(","))
+        run_he(args.out_dir, args.reps, args.methods.split(","),
+               ALPHAS if args.alphas == "all" else [float(a) for a in args.alphas.split(",")])
 
 
 if __name__ == "__main__":
