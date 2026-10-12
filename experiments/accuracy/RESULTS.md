@@ -3,7 +3,7 @@
 Script `run_accuracy.py`; raw results `results/accuracy_raw.csv` (one row per case, test, repetition and alpha),
 summary `results/accuracy_summary.csv`.
 
-HEaaN FGb (CPU), log_slots = 15. Two-sided alpha in {0.001, 0.01, 0.025, 0.05, 0.1}, 2 repetitions. For every repetition
+HEaaN FGb (CPU), log_slots = 15. Two-sided alpha in {0.001, 0.01, 0.025, 0.05, 0.1}, 10 repetitions. For every repetition
 the encrypted statistics are computed once and the decision is evaluated separately for every alpha; copies of the
 intermediate ciphertexts are decrypted for the measurement. Each comparison has the public input interval [L, U]
 (minimum and maximum of the two groups) and R = U - L.
@@ -46,8 +46,8 @@ relative error; score: absolute error divided by the public bound, |s - s_HE| / 
 
 | test | statistic | 1/df | critical value c^2 | score / B | p-value | plaintext \|s\| / B (min - max) |
 |---|---|---|---|---|---|---|
-| Welch | 1.96e-07 (2.47e-07), max 7.80e-07 | 1.75e-06 (1.98e-06), max 6.08e-06 | 1.31e-04 (2.92e-04), max 9.17e-04 | 6.16e-09 (1.81e-08), max 9.42e-08 | 4.35e-10 (1.35e-09), max 5.63e-09 | 2.82e-06 - 1.23e-02 |
-| F | -- | -- | public | 1.41e-10 (9.97e-11), max 3.60e-10 | -- | 3.79e-06 - 8.31e-03 |
-| Z | 5.96e-09 (1.08e-08), max 3.18e-08 | -- | public | 4.73e-11 (8.49e-11), max 2.62e-10 | 1.07e-10 (2.95e-10), max 1.11e-09 | 4.31e-05 - 1.42e-01 |
+| Welch | 1.87e-07 (2.29e-07), max 7.80e-07 | 1.48e-06 (1.62e-06), max 7.38e-06 | 1.31e-04 (2.90e-04), max 9.19e-04 | 6.17e-09 (1.81e-08), max 9.85e-08 | 4.12e-10 (1.46e-09), max 8.41e-09 | 2.82e-06 - 1.23e-02 |
+| F | -- | -- | public | 1.33e-10 (1.04e-10), max 5.58e-10 | -- | 3.79e-06 - 8.31e-03 |
+| Z | 6.31e-09 (1.10e-08), max 3.53e-08 | -- | public | 4.03e-11 (7.22e-11), max 2.97e-10 | 1.89e-10 (5.81e-10), max 3.15e-09 | 4.31e-05 - 1.42e-01 |
 
 The F test computes no F statistic or p-value; the F and Z critical values are public.

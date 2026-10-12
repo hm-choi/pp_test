@@ -6,7 +6,7 @@ reference SciPy `t.ppf`, error = relative error (MaxRE, MRE).
 Plaintext part (--part plain). Every method is evaluated under two df-range
 conditions, each with its own evaluation grid of EVAL_POINTS df (log-spaced
 over the range, plus the Welch df of the cases for a case range):
-- global : df in [1, 2000];
+- global : df in [1, 10^4];
 - case   : df in [min(n1, n2) - 1, n1 + n2 - 2] for each dataset case (the
            Welch-Satterthwaite df always lies in this public range).
 
@@ -16,18 +16,8 @@ the same range they are evaluated on):
           coeffs/t_critical_coeffs.py, fitted on u in [0, 1], i.e. df >= 1);
 - df    : input df.
 
-Lookup tables (degree-independent):
-- textbook_floor : textbook df grid (distribution_table/t_distribution_table.csv:
-                   1..30, 40, 50, 60, 80, 100, 120, 1000), largest tabulated
-                   df <= df;
-- textbook_interp: same grid plus df = infinity (normal quantile), linear
-                   interpolation of c^2 in 1/df;
-- integer_floor / integer_round : every integer df, floor / round of df;
-- integer_interp : every integer df up to the largest df of all ranges,
-                   linear interpolation of c^2 in 1/df.
-
 For the global condition, MaxRE is also reported per df band
-(1-2, 2-10, 10-30, 30-2000).
+(1-2, 2-10, 10-30, 30-10^4).
 
 HE part (--part he). The same df points (two ciphertexts of 32768 slots) and
 df-range conditions (global and one per distinct case range), encrypted
@@ -39,19 +29,11 @@ same method in plaintext:
 - invdf_range : 1/df polynomial refitted on the case range (case conditions);
 - df    : df = 1/u in HE (invSqrt of u * df_lo, squared), then the df
           polynomial fitted on the condition range (results/he_raw.csv,
-          stage time of the division in nu_time);
-- lookup tables without division: the comparisons df >= d_j are evaluated as
-          u <= 1/d_j, i.e. one encrypted sign of (u - knot_j) / width per table
-          entry, packed in the slots (one ciphertext per 32768 entries); floor
-          and linear interpolation in 1/df are weighted slot sums of the same
-          step (floor) or of (u - knot_j) * step (interpolation), with every
-          alpha's weights public. One df per ciphertext, at LOOKUP_POINTS
-          interior points of each range plus the Welch df of the cases
-          (results/he_lookup_raw.csv).
+          stage time of the division in nu_time).
 
 Run (inside the HEaaN container, cwd = project root):
     python3 experiments/critical_boundary/run_critical_boundary.py --part plain
-    python3 experiments/critical_boundary/run_critical_boundary.py --part he [--methods poly,lookup]
+    python3 experiments/critical_boundary/run_critical_boundary.py --part he
 """
 
 import argparse
@@ -78,13 +60,12 @@ from coeffs.t_critical_coeffs import (
 
 ALPHAS = [0.001, 0.01, 0.025, 0.05, 0.1]
 LOG_DEGREES = range(3, 8)  # degree = 2^3-1, ..., 2^7-1
-DF_MIN, DF_MAX = 1.0, 2000.0
-DF_BANDS = [(1.0, 2.0), (2.0, 10.0), (10.0, 30.0), (30.0, 2000.0)]
+DF_MIN, DF_MAX = 1.0, 10000.0
+DF_BANDS = [(1.0, 2.0), (2.0, 10.0), (10.0, 30.0), (30.0, 10000.0)]
 REPS = 2
 EVAL_POINTS = 65536  # two ciphertexts of 32768 slots
 
 # HE part.
-LOOKUP_POINTS = {"global": 20, "case": 3}
 # (log_degree, Newton iterations) of invSqrt in the df-input baseline
 # (domain [df_lo / df_hi, 1]).
 DF_INPUT_INVSQRT = {"global": (6, 4), "case": (5, 1)}
@@ -99,33 +80,6 @@ def exact_sq(alpha, df):
 
 
 
-def textbook_df_grid():
-
-    header = (PROJECT_ROOT / "distribution_table" / "t_distribution_table.csv").read_text().splitlines()[0]
-    return np.array([float(c.removeprefix("df_")) for c in header.split(",")[1:]])
-
-
-def lookup_floor(table_df, df):
-
-    idx = np.clip(np.searchsorted(table_df, df, side="right") - 1, 0, len(table_df) - 1)
-    return table_df[idx]
-
-
-def lookup_interp(alpha, table_df, df, with_infinity=False):
-
-    # Linear interpolation of c^2 in u = 1/df between tabulated points
-    # (np.interp needs increasing x, so interpolate over decreasing df).
-    u_table = 1.0 / table_df[::-1]
-    c_table = exact_sq(alpha, table_df[::-1])
-
-    if with_infinity:
-        # df = infinity: u = 0, c = normal quantile.
-        u_table = np.concatenate([[0.0], u_table])
-        c_table = np.concatenate([[stats.norm.ppf(1.0 - alpha / 2.0) ** 2], c_table])
-
-    return np.interp(1.0 / df, u_table, c_table)
-
-
 def errors(y, y_true):
 
     re = np.abs(y - y_true) / np.abs(y_true)
@@ -134,9 +88,7 @@ def errors(y, y_true):
 
 def run_plain(out_dir):
 
-    table_df = textbook_df_grid()
     conditions = he_conditions()
-    integer_df = np.arange(1.0, max(c["range"][1] for c in conditions.values()) + 1.0)
     rows = []
 
     for range_name, condition in conditions.items():
@@ -158,13 +110,6 @@ def run_plain(out_dir):
                         row[f"max_re_df{b_lo:g}-{b_hi:g}"] = errors(y[mask], y_true[mask])[0]
 
                 rows.append(row)
-
-            # Lookup tables.
-            add("textbook_floor", "", exact_sq(alpha, lookup_floor(table_df, df)))
-            add("textbook_interp", "", lookup_interp(alpha, table_df, df, with_infinity=True))
-            add("integer_floor", "", exact_sq(alpha, np.floor(df)))
-            add("integer_round", "", exact_sq(alpha, np.maximum(1.0, np.round(df))))
-            add("integer_interp", "", lookup_interp(alpha, integer_df, df))
 
             for ld in LOG_DEGREES:
                 degree = 2 ** ld - 1
@@ -221,41 +166,6 @@ def eval_grid(condition):
     lo, hi = condition["range"]
     welch = np.array(sorted(condition["welch"].values()))
     return np.concatenate([np.geomspace(lo, hi, EVAL_POINTS - len(welch)), welch]), welch
-
-
-def lookup_points(name, condition):
-
-    lo, hi = condition["range"]
-    k = LOOKUP_POINTS["global" if name == "global" else "case"]
-    points = [(f"grid{i}", float(d)) for i, d in enumerate(np.geomspace(lo, hi, k + 2)[1:-1])]
-    return points + [(f"welch:{case}", df) for case, df in condition["welch"].items()]
-
-
-def lookup_table(alpha, knot_df, with_infinity):
-
-    # Knots in ascending u = 1/df (u = 0 for df = infinity) and the weights of
-    # floor(u) = base + sum_j dF_j step(u - u_j) and
-    # interp(u) = base_i + sum_j dS_j max(u - u_j, 0).
-    df_desc = np.sort(knot_df)[::-1]
-    u = 1.0 / df_desc
-    f = exact_sq(alpha, df_desc)
-
-    if with_infinity:
-        u = np.concatenate([[0.0], u])
-        f_inf = stats.norm.ppf(1.0 - alpha / 2.0) ** 2
-        f_all = np.concatenate([[f_inf], f])
-    else:
-        f_all = f
-
-    # Floor: the infinity knot (if any) has weight 0 (largest df = df_desc[0]).
-    floor_w = np.zeros(len(u))
-    off = 1 if with_infinity else 0
-    floor_w[off:-1] = np.diff(f)
-    slopes = np.diff(f_all) / np.diff(u)
-    interp_w = np.zeros(len(u))
-    interp_w[:-1] = np.diff(np.concatenate([[0.0], slopes]))
-
-    return u, {"floor": (float(f[0]), floor_w), "interp": (float(f_all[0]), interp_w)}
 
 
 def run_he_poly(engine, ht, conditions, reps, path, alphas):
@@ -377,97 +287,6 @@ def he_df_input(engine, approx, ctxt_u, lo, hi, log_degree, iteration):
     return engine.sub(engine.mult(yk, yk), (hi + lo) / (hi - lo))
 
 
-def run_he_lookup(engine, ht, conditions, reps, path):
-
-    from engine.HEdata import Message
-
-    fields = ["condition", "df_lo", "df_hi", "point", "df", "table", "mapping", "alpha", "rep",
-              "entries", "ciphertexts", "time", "compare_time", "combine_time", "bootstrap_count",
-              "he_value", "plain_value", "exact", "re", "ae_vs_plain"]
-    done = set()
-
-    if path.is_file():
-        with path.open() as file:
-            done = {(r["condition"], r["point"], r["table"], r["rep"]) for r in csv.DictReader(file)}
-
-    new_file = not path.is_file()
-    file = path.open("a", newline="")
-    writer = csv.DictWriter(file, fieldnames=fields)
-
-    if new_file:
-        writer.writeheader()
-
-    textbook_df = textbook_df_grid()
-    S = engine.num_slots
-
-    for name, condition in conditions.items():
-        lo, hi = condition["range"]
-        tables = {
-            "textbook": (textbook_df, True, 1.0),
-            "integer": (np.arange(lo, hi + 1.0), False, 1.0 / lo - 1.0 / hi),
-        }
-
-        for point, df in lookup_points(name, condition):
-            u = 1.0 / df
-
-            for table, (knot_df, with_infinity, width) in tables.items():
-                knots, _ = lookup_table(ALPHAS[0], knot_df, with_infinity)
-                m = len(knots)
-                parts = -(-m // S)
-                pad = lambda a: np.concatenate([a, np.zeros(parts * S - m)])
-                plain = {
-                    ("floor", a): float(exact_sq(a, lookup_floor(textbook_df, df)) if table == "textbook"
-                                        else exact_sq(a, math.floor(df)))
-                    for a in ALPHAS
-                }
-                plain.update({("interp", a): float(lookup_interp(a, knot_df, np.array([df]), with_infinity)[0])
-                              for a in ALPHAS})
-                weights = {a: lookup_table(a, knot_df, with_infinity)[1] for a in ALPHAS}
-                knot_msg = Message(pad(knots), engine.log_slots)
-                scale_msg = Message(pad(np.full(m, 1.0 / width)), engine.log_slots)
-
-                for rep in range(reps):
-                    if (name, point, table, str(rep)) in done:
-                        continue
-
-                    ctxt = engine.enc(Message(np.full(parts * S, u), engine.log_slots), level=12)
-                    ht.reset_bootstrap_count()
-                    start = time.perf_counter()
-                    w = engine.sub(ctxt, knot_msg)
-                    sign = ht.approx.sign(engine.mult(w, scale_msg))
-                    step = engine.mult(engine.add(sign, 1.0), 0.5)
-                    compare_time = time.perf_counter() - start
-                    bts = ht.bootstrap_count()
-
-                    start = time.perf_counter()
-                    relu = engine.mult(w, step)
-                    relu_time = time.perf_counter() - start
-
-                    for alpha in ALPHAS:
-                        for mapping, src in (("floor", step), ("interp", relu)):
-                            base, wv = weights[alpha][mapping]
-                            start = time.perf_counter()
-                            out = engine.add(engine.sum(engine.mult(src, Message(pad(wv), engine.log_slots))), base)
-                            combine_time = time.perf_counter() - start + (relu_time if mapping == "interp" else 0.0)
-                            he = float(np.array(engine.dec(out)[0], dtype=np.complex128).real[0])
-                            y_true = float(exact_sq(alpha, df))
-                            pv = plain[(mapping, alpha)]
-                            writer.writerow({
-                                "condition": name, "df_lo": lo, "df_hi": hi, "point": point, "df": df,
-                                "table": table, "mapping": mapping, "alpha": alpha, "rep": rep,
-                                "entries": m, "ciphertexts": parts,
-                                "time": compare_time + combine_time, "compare_time": compare_time,
-                                "combine_time": combine_time, "bootstrap_count": bts,
-                                "he_value": he, "plain_value": pv, "exact": y_true,
-                                "re": abs(he - y_true) / y_true, "ae_vs_plain": abs(he - pv),
-                            })
-
-                    file.flush()
-                    print(f"{name} {point} df={df:.2f} {table} rep={rep} compare={compare_time:.1f}s", flush=True)
-
-    file.close()
-
-
 def write_csv(path, fields, rows):
 
     with path.open("w", newline="") as file:
@@ -478,7 +297,7 @@ def write_csv(path, fields, rows):
     print(f"saved {path}")
 
 
-def run_he(out_dir, reps, methods, alphas):
+def run_he(out_dir, reps, alphas):
 
     from common.he_utils import make_engine
     from operators.HEhypo_test import HEHypothesisTesting
@@ -487,11 +306,7 @@ def run_he(out_dir, reps, methods, alphas):
     ht = HEHypothesisTesting(engine)
     conditions = he_conditions()
 
-    if "poly" in methods:
-        run_he_poly(engine, ht, conditions, reps, out_dir / "he_raw.csv", alphas)
-
-    if "lookup" in methods:
-        run_he_lookup(engine, ht, conditions, reps, out_dir / "he_lookup_raw.csv")
+    run_he_poly(engine, ht, conditions, reps, out_dir / "he_raw.csv", alphas)
 
 
 def main():
@@ -499,7 +314,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--part", choices=["plain", "he"], required=True)
     parser.add_argument("--reps", type=int, default=REPS)
-    parser.add_argument("--methods", default="poly,lookup")
     parser.add_argument("--alphas", default="all")
     parser.add_argument("--out-dir", type=Path, default=RESULT_DIR)
     args = parser.parse_args()
@@ -509,7 +323,7 @@ def main():
     if args.part == "plain":
         run_plain(args.out_dir)
     else:
-        run_he(args.out_dir, args.reps, args.methods.split(","),
+        run_he(args.out_dir, args.reps,
                ALPHAS if args.alphas == "all" else [float(a) for a in args.alphas.split(",")])
 
 
