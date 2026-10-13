@@ -1,4 +1,4 @@
 # Local Codex instructions
 AGENTS.md
-__pycache__/
-*.pyc
+**/__pycache__/
+**/*.pyc

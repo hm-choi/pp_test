@@ -1,31 +1,27 @@
 from statistics import NormalDist
 
 import numpy as np
+import math
 
 from engine.HEengine import HEengine
 from engine.HEdata import Ciphertext
 from operators.HEapprox import HEApprox
 
+from coeffs.invSqrt_coeffs import (
+    _INV_SQRT_MIN,
+    _INV_SQRT_MAX,
+)
+
 from coeffs.t_critical_coeffs import (
-    _T_CRITICAL_SQ_COEFFS,
+    _T_CRITICAL_COEFFS,
     _T_CRITICAL_U_MIN,
     _T_CRITICAL_U_MAX,
 )
 
-
-# Lower bound of the normalized Welch variance V / V_max (public assumption),
-# i.e. the inverse square root input domain is [V_BAR_MIN, 1].
-V_BAR_MIN = 1e-2
-
 # Inverse square root configuration.
-#
-# "select" (optional) maps the HE-DAP input level (level of the input before
-# the domain mapping) to (log_degree, iteration, pre_bts), e.g. HE-DAP
-# results; otherwise log_degree / iteration / pre_bts are used.
-DEFAULT_INVSQRT = {
-    "log_degree": 6,
-    "iteration": 7,
-    "pre_bts": False,
+DEFAULT_INVSQRT_PARAMS = {
+    "log_degree": 4,
+    "iteration": 5,
 }
 
 
@@ -39,7 +35,7 @@ class HEHypothesisTesting:
 
         self.engine = engine
         self.approx = HEApprox(engine)
-        self.invsqrt = {**DEFAULT_INVSQRT, **(invsqrt or {})}
+        self.invsqrt_params = {**DEFAULT_INVSQRT_PARAMS, **(invsqrt or {})}
         self._bootstrap_count = 0
 
     def bootstrap_count(
@@ -59,10 +55,58 @@ class HEHypothesisTesting:
         self,
         ctxt: Ciphertext,
     ):
-
-        # Bootstrap is performed in place.
+        # Regular bootstrap, performed in place.
+        # Input range [-1, 1], input level >= 3.
         self.engine.bootstrap(ctxt)
         self._bootstrap_count += 1
+
+    def _bootstrap_extended(
+        self,
+        ctxt: Ciphertext,
+    ):
+        # Extended bootstrap, performed in place.
+        # Input range [-2^20, 2^20], input level >= 4.
+        self.engine.bootstrap_extended(ctxt)
+        self._bootstrap_count += 1
+
+    def _bootstrap_bounded(
+        self,
+        ctxt: Ciphertext,
+        bound: float,
+    ):
+        # Bootstrap, performed in place.
+        # If bound is greater than 1, perform bootstrap_extended.
+        # Else, perform regular bootstrap.
+        self.engine.bootstrap_bounded(ctxt, bound)
+        self._bootstrap_count += 1
+
+    def _ensure_cheb_level(
+        self,
+        ctxt: Ciphertext,
+        degree: int,
+    ):
+
+        # HEaaN evaluates a degree-(2^k - 1) Chebyshev expansion with
+        # k levels and requires input level >= k + 3.
+        # The bootstrap is performed in place (input must lie in [-1, 1]).
+        log_degree = math.ceil(math.log2(degree + 1))
+
+        if ctxt.level() < log_degree + 3:
+            self._bootstrap(ctxt)
+
+    def _ensure_level(
+        self,
+        ctxt: Ciphertext,
+        level: int,
+        bound=None,
+    ):
+
+        # Bootstrap in place if ctxt.level() < level; bound is the public
+        # bound of |ctxt| (regular bootstrap if <= 1, extended otherwise).
+        if ctxt.level() < level:
+            self._bootstrap_bounded(ctxt, bound)
+
+        return ctxt
 
     @staticmethod
     def _trace(
@@ -130,32 +174,6 @@ class HEHypothesisTesting:
         #   <= R^4 / 16 * (1/(n1-1)^3 + 1/(n2-1)^3).
         return (R ** 4 / 16.0) * (1.0 / (n1 - 1) ** 3 + 1.0 / (n2 - 1) ** 3)
 
-    @classmethod
-    def check_inv_sqrt_domain(
-        cls,
-        x1,
-        x2,
-        R: float,
-    ):
-
-        # Plaintext check of the inverse square root input domain of Welch's
-        # t-test, V / V_max in [V_BAR_MIN, 1], run on the data before
-        # encryption.
-        #
-        # Returns V / V_max; raises ValueError outside the domain.
-        x1 = np.asarray(x1, dtype=np.float64)
-        x2 = np.asarray(x2, dtype=np.float64)
-        n1, n2 = len(x1), len(x2)
-
-        value = (np.var(x1, ddof=1) / n1 + np.var(x2, ddof=1) / n2) / cls.welch_v_max(n1, n2, R)
-
-        if not V_BAR_MIN <= value <= 1.0:
-            raise ValueError(
-                f"V / V_max = {value:.6g} outside [{V_BAR_MIN:g}, 1]"
-            )
-
-        return float(value)
-
     # ------------------------------------------------------------------
     # Shared building blocks
     # ------------------------------------------------------------------
@@ -172,7 +190,7 @@ class HEHypothesisTesting:
         # the normalized InvDF z. The input is bootstrapped beforehand when
         # needed so that the output keeps at least `min_output_level` levels.
         degree = 2 ** log_degree - 1
-        table = _T_CRITICAL_SQ_COEFFS
+        table = _T_CRITICAL_COEFFS
 
         if not np.isfinite(alpha) or not 0.0 < alpha < 1.0:
             raise ValueError("alpha must be a finite value in (0, 1)")
@@ -234,7 +252,7 @@ class HEHypothesisTesting:
     ):
 
         # Plaintext evaluation of the critical-value polynomial at u = 1 / df.
-        coeffs = _T_CRITICAL_SQ_COEFFS[2 ** log_degree - 1][alpha]
+        coeffs = _T_CRITICAL_COEFFS[2 ** log_degree - 1][alpha]
         z = 2.0 * (u - _T_CRITICAL_U_MIN) / (_T_CRITICAL_U_MAX - _T_CRITICAL_U_MIN) - 1.0
 
         return float(np.polynomial.chebyshev.chebval(z, coeffs))
@@ -259,39 +277,38 @@ class HEHypothesisTesting:
 
     def _inv_sqrt(
         self,
-        v_bar: Ciphertext,
+        v: Ciphertext,
+        v_max: float,
         min_level: int,
     ):
 
         # Approximate 1 / sqrt(V_bar) for V_bar in [V_BAR_MIN, 1]. The output
         # (|y| <= 1 / sqrt(V_BAR_MIN)) is refreshed with the extended
         # bootstrap when its level is below `min_level`.
-        lo, hi = V_BAR_MIN, 1.0
+        lo, hi = _INV_SQRT_MIN, _INV_SQRT_MAX
+
+        self._bootstrap_bounded(v, v_max)
 
         # First input for Newton iteration: V_bar / 2.
-        x_half = self.engine.mult(v_bar, 0.5)
+        x_half = self.engine.mult(v, 0.5)
 
         # Second input for the Chebyshev approximation:
         # map V_bar from [lo, hi] to [-1, 1].
-        x_cheb = self.engine.mult(v_bar, 2.0 / (hi - lo))
-        x_cheb = self.engine.sub(x_cheb, (hi + lo) / (hi - lo))
+        if v_max < _INV_SQRT_MAX:
+            v_max = 1.0
+        x_cheb = self.engine.sub(v, lo)
+        x_cheb = self.engine.mult(x_cheb, 2.0 / (hi - lo) / v_max)
+        x_cheb = self.engine.sub(x_cheb, 1 / v_max)
 
-        cfg = self.invsqrt
-
-        if "select" in cfg:
-            # Keyed by the HE-DAP input level l, i.e. the level of V_bar
-            # before the one-level mapping (x_cheb is at level l - 1).
-            log_degree, iteration, pre_bts = cfg["select"][x_cheb.level() + 1]
-        else:
-            log_degree, iteration, pre_bts = cfg["log_degree"], cfg["iteration"], cfg["pre_bts"]
+        cfg = self.invsqrt_params
+        log_deg, iter = cfg["log_degree"], cfg["iteration"]
 
         y = self.approx.invSqrt(
             x_half,
             x_cheb,
-            domain=(lo, hi),
-            log_degree=log_degree,
-            iteration=iteration,
-            pre_bts=pre_bts,
+            log_degree=log_deg,
+            iteration=iter,
+            scale=1/np.sqrt(v_max)
         )
 
         self.approx.ensure_level(y, min_level, 1.0 / np.sqrt(lo))
@@ -352,16 +369,15 @@ class HEHypothesisTesting:
 
         # V = A1 + A2, normalized by the public bound: V_bar = V / V_max.
         v = self.engine.add(a1, a2)
-        v_bar = self.engine.mult(v, 1.0 / v_max)
 
         # Y = 1 / sqrt(V_bar). Level 9 is needed for 1/V_bar, 1/V_bar^2,
         # 1/df and the critical-value mapping (bootstrapped at level >= 3
         # before the Chebyshev evaluation).
-        y = self._inv_sqrt(v_bar, 9)
+        y = self._inv_sqrt(v, v_max, 9)
         self._trace(trace, "inv_sqrt_v_bar", y)
 
         # T = (mean1 - mean2) / sqrt(V_max) * Y.
-        u = self.engine.mult(self.engine.sub(mean1, mean2), 1.0 / np.sqrt(v_max))
+        u = self.engine.sub(mean1, mean2)
         t = self.engine.mult(u, y)
         self._trace(trace, "t", t)
 
@@ -375,16 +391,16 @@ class HEHypothesisTesting:
         d1 = self.engine.mult(self.engine.mult(a1, a1), 1.0 / ((n1 - 1) * d_max))
         d2 = self.engine.mult(self.engine.mult(a2, a2), 1.0 / ((n2 - 1) * d_max))
         d_bar = self.engine.add(d1, d2)
-        self.approx.ensure_level(d_bar, 7, 1.0)
+        self._ensure_level(d_bar, 7, 1.0)
 
         # 1 / V_bar = Y^2, 1 / V_bar^2 and
         # 1 / df = D / V^2 = D_bar / V_bar^2 * D_max / V_max^2.
-        inv_v_bar = self.engine.mult(y, y)
-        inv_v_bar_sq = self.engine.mult(inv_v_bar, inv_v_bar)
+        inv_v = self.engine.mult(y, y)
+        inv_v_sq = self.engine.mult(inv_v, inv_v)
 
         inv_df = self.engine.mult(
-            self.engine.mult(d_bar, inv_v_bar_sq),
-            d_max / v_max ** 2,
+            self.engine.mult(d_bar, inv_v_sq),
+            d_max,
         )
         self._trace(trace, "inv_df", inv_df)
 
@@ -417,7 +433,7 @@ class HEHypothesisTesting:
             1.0 / (min(n1, n2) - 1), alpha, critical_log_degree,
         )
 
-        return max(R ** 2 / (V_BAR_MIN * v_max), c_max_sq)
+        return max(R ** 2 / (_INV_SQRT_MIN), c_max_sq)
 
     def welch_score(
         self,

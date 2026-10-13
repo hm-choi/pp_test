@@ -7,6 +7,11 @@ from numpy.polynomial import Chebyshev
 from engine.HEengine import HEengine
 from engine.HEdata import Ciphertext
 
+from coeffs.invSqrt_coeffs import (
+    _INV_SQRT_COEFFS,
+    _INV_SQRT_MIN,
+    _INV_SQRT_MAX,
+)
 from coeffs.sign_coeffs import _SIGN_PPTEST_DATA
 
 
@@ -39,7 +44,6 @@ class HEApprox:
         self,
         ctxt: Ciphertext,
     ):
-
         # Regular bootstrap, performed in place.
         # Input range [-1, 1], input level >= 3.
         self.engine.bootstrap(ctxt)
@@ -49,12 +53,9 @@ class HEApprox:
         self,
         ctxt: Ciphertext,
     ):
-
         # Extended bootstrap, performed in place.
         # Input range [-2^20, 2^20], input level >= 4.
-        for i in range(len(ctxt)):
-            self.engine.bts.bootstrap_extended(ctxt[i], ctxt[i])
-
+        self.engine.bootstrap_extended(ctxt)
         self._bootstrap_count += 1
 
     def _bootstrap_bounded(
@@ -62,33 +63,11 @@ class HEApprox:
         ctxt: Ciphertext,
         bound: float,
     ):
-
-        # Choose the bootstrap by the public bound of |ctxt|.
-        if bound is not None and bound <= 1.0:
-            self._bootstrap(ctxt)
-            return
-
-        if ctxt.level() < 4:
-            raise ValueError(
-                "Extended bootstrap requires level >= 4 "
-                f"(got {ctxt.level()})"
-            )
-
-        self._bootstrap_extended(ctxt)
-
-    def ensure_level(
-        self,
-        ctxt: Ciphertext,
-        level: int,
-        bound=None,
-    ):
-
-        # Bootstrap in place if ctxt.level() < level; bound is the public
-        # bound of |ctxt| (regular bootstrap if <= 1, extended otherwise).
-        if ctxt.level() < level:
-            self._bootstrap_bounded(ctxt, bound)
-
-        return ctxt
+        # Bootstrap, performed in place.
+        # If bound is greater than 1, perform bootstrap_extended.
+        # Else, perform regular bootstrap.
+        self.engine.bootstrap_bounded(ctxt, bound)
+        self._bootstrap_count += 1
 
     def _ensure_cheb_level(
         self,
@@ -109,57 +88,35 @@ class HEApprox:
     # ------------------------------------------------------------------
 
     def inv_sqrt_coeffs(
-        self,
-        log_degree: int,
-        domain,
+        self, 
+        log_degree: int
     ):
+        degree = 2**log_degree - 1
 
-        # Chebyshev coefficients of 1 / sqrt(x) for x in domain = [v_min, v_max],
-        # generated from the public bounds (same construction as
-        # coeffs/approx.ipynb):
-        # f(t) = 1 / sqrt(x) with x = (v_max - v_min) t / 2 + (v_max + v_min) / 2.
-        degree = 2 ** log_degree - 1
-        v_min, v_max = float(domain[0]), float(domain[1])
+        try:
+            coeffs = _INV_SQRT_COEFFS[degree]
+        except KeyError:
+            raise ValueError(
+                f"No invSqrt coefficients are available for degree {degree}"
+            ) from None
 
-        if not 0.0 < v_min < v_max:
-            raise ValueError("domain must satisfy 0 < v_min < v_max")
-
-        key = (v_min, v_max, log_degree)
-
-        if key not in self._coeff_cache:
-            def func(t):
-                x = (v_max - v_min) * t / 2.0 + (v_max + v_min) / 2.0
-                return x ** -0.5
-
-            poly = Chebyshev.interpolate(func, degree, domain=[-1.0, 1.0])
-            self._coeff_cache[key] = poly.coef.astype(np.float64)
-
-        return self._coeff_cache[key]
+        return np.asarray(coeffs, dtype=np.float64).copy()
 
     def invSqrt(
         self,
         x_half: Ciphertext,
         x_cheb: Ciphertext,
-        domain,
-        log_degree=6,
-        iteration=7,
-        pre_bts=False,
+        log_degree=4,
+        iteration=5,
+        scale=1.0,
     ):
 
         # Inputs (prepared by the caller to save levels):
         #
         # x_half = x / 2,
-        # x_cheb = 2x / (v_max - v_min) - (v_max + v_min) / (v_max - v_min),
-        #
+        # x_cheb = 2 * (x - v_min) / (v_max - v_min) - 1,
         # with x in domain = [v_min, v_max].
-        # pre_bts: Pre-BTS indicator c of HE-DAP (see invSqrt_init).
-        x_half, y = self.invSqrt_init(
-            x_half,
-            x_cheb,
-            domain,
-            log_degree,
-            pre_bts,
-        )
+        y = self.invSqrt_init(x_cheb, log_degree, scale)
 
         # Refine the initial approximation using Newton iterations.
         for _ in range(iteration):
@@ -169,50 +126,21 @@ class HEApprox:
 
     def invSqrt_init(
         self,
-        x_half: Ciphertext,
         x_cheb: Ciphertext,
-        domain,
-        log_degree=6,
-        pre_bts=False,
+        log_degree,
+        scale
     ):
 
-        # Returns (x_half ready for Newton, initial approximation y0).
-        #
-        # pre_bts: bootstrap x_cheb (in [-1, 1]) first and derive
-        # x_half = ((v_max - v_min) * x_cheb + (v_max + v_min)) / 4 from it,
-        # i.e. one bootstrap of the input as in HE-DAP.
-        coeffs = self.inv_sqrt_coeffs(log_degree, domain)
-        v_min, v_max = float(domain[0]), float(domain[1])
-
-        x_cheb = Ciphertext(x_cheb)
-
-        if pre_bts:
-            self._bootstrap(x_cheb)
-
-            x_half = self.engine.mult(x_cheb, (v_max - v_min) / 4.0)
-            x_half = self.engine.add(x_half, (v_max + v_min) / 4.0)
+        # Returns initial approximation y0.
+        coeffs = self.inv_sqrt_coeffs(log_degree)
 
         # Obtain the initial inverse square root approximation
         # from the Chebyshev-mapped ciphertext.
-        y = self.cheb_invSqrt(x_cheb, coeffs)
-
-        # Public bound of x_half = x / 2 is v_max / 2.
-        return self.newton_prepare(x_half, v_max / 2.0), y
-
-    def newton_prepare(
-        self,
-        x_half: Ciphertext,
-        half_bound: float,
-    ):
-
-        # The Newton output level is min(level(x_half), level(y)) - 2 and
-        # must stay >= 4 for the extended bootstrap of y.
-        x_half = Ciphertext(x_half)
-
-        if x_half.level() <= 5:
-            self._bootstrap_bounded(x_half, half_bound)
-
-        return x_half
+        return self.engine.evaluate_chebyshev(
+            x_cheb,
+            self.engine.make_cheb_coeffs(coeffs),
+            scale
+        )
 
     def newton_step(
         self,
@@ -220,11 +148,8 @@ class HEApprox:
         y: Ciphertext,
     ):
 
-        # y lies in [1/sqrt(v_max), 1/sqrt(v_min)], outside the [-1, 1]
-        # range of the regular bootstrap, so the extended bootstrap is used.
-        if y.level() <= 5:
-            y = Ciphertext(y)
-            self._bootstrap_extended(y)
+        if y.level() <= 4:
+            self._bootstrap(y)
 
         tmp_a = self.engine.mult(y, 1.5)
 
@@ -233,37 +158,6 @@ class HEApprox:
         tmp_b = self.engine.mult(tmp_b, y_squared)
 
         return self.engine.sub(tmp_a, tmp_b)
-
-    def cheb_invSqrt(
-        self,
-        ctxt: Ciphertext,
-        coeffs,
-    ):
-
-        x = Ciphertext(ctxt)
-
-        coeffs = np.asarray(coeffs, dtype=np.float64)
-        degree = len(coeffs) - 1
-        log_degree = math.ceil(math.log2(degree + 1))
-
-        # Ensure that the ciphertext has enough remaining levels
-        # before evaluating the Chebyshev polynomial.
-        self._ensure_cheb_level(x, degree)
-
-        y = self.engine.evaluate_chebyshev(
-            x,
-            self.engine._make_cheb_coeffs(coeffs),
-        )
-
-        # Refresh y0 with the regular bootstrap when the first Newton step
-        # would need a bootstrap. y0 may exceed [-1, 1] (up to 1/sqrt(v_min));
-        # the regular bootstrap then adds a relative error of about
-        # 1e-7 * |y0|^2 (1e-4 at |y0| = 31.6), which the following Newton
-        # iterations refine, so the extended bootstrap is not needed here.
-        if y.level() <= 5:
-            self._bootstrap(y)
-
-        return y
 
     # ------------------------------------------------------------------
     # Sign

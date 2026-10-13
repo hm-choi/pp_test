@@ -68,7 +68,7 @@ class HEengine:
     def is_gpu(self):
 
         return self.device_type == "gpu"
-
+    
     def __setup__(self):
 
         if self.is_gpu():
@@ -97,7 +97,7 @@ class HEengine:
             self._warmup_bootstrap()
 
         return self
-
+    
     def _load_keys(self):
 
         try:
@@ -120,7 +120,7 @@ class HEengine:
             keygen.save(self.key_dir_path)
 
             self.pk = keygen.keypack
-
+    
     def _init_operators(self):
 
         if self.is_gpu():
@@ -131,7 +131,7 @@ class HEengine:
         self.dct = hn.Decryptor(self.context)
         self.evt = hn.HomEvaluator(self.context, self.pk)
         self.bts = hn.Bootstrapper(self.evt)
-
+    
     def _warmup_bootstrap(self):
 
         msg = Message(1)
@@ -232,7 +232,7 @@ class HEengine:
             )
 
         return ret
-
+    
     def _mult_integer(self, lhs: Ciphertext, rhs: int):
 
         if not isinstance(lhs, Ciphertext):
@@ -288,19 +288,16 @@ class HEengine:
             return self._mult_integer(oprd1, int(oprd2))
 
         if isinstance(oprd2, (float, np.floating)):
-            ret = oprd1
+            ret = Ciphertext(len(oprd1), self.context)
 
             # HEaaN encodes a real constant with limited absolute precision:
             # constants below ~1e-8 become 0 and the relative error grows as
             # the constant shrinks. Small constants are therefore applied as
             # a product of factors >= MIN_CONST (one level per factor).
             for factor in self._const_factors(float(oprd2)):
-                out = Ciphertext(len(oprd1), self.context)
 
                 for i in range(len(oprd1)):
-                    self.evt.mult(ret[i], factor, out[i])
-
-                ret = out
+                    self.evt.mult(oprd1[i], factor, ret[i])
 
             return ret
 
@@ -382,7 +379,7 @@ class HEengine:
             self.evt.negate(ctxt[i], ret[i])
 
         return ret
-
+    
     def bootstrap(self, oprd):
 
         if not isinstance(oprd, Ciphertext):
@@ -390,6 +387,40 @@ class HEengine:
 
         for i in range(len(oprd)):
             self.bts.bootstrap(oprd[i], oprd[i])
+
+    def bootstrap_extended(self, oprd):
+    
+        if not isinstance(oprd, Ciphertext):
+            raise TypeError("oprd must be Ciphertext")
+
+        for i in range(len(oprd)):
+            self.bts.bootstrap_extended(oprd[i], oprd[i])
+
+    def bootstrap_bounded(
+        self,
+        ctxt: Ciphertext,
+        bound: float,
+    ):
+
+        # Choose the bootstrap by the public bound of |ctxt|.
+        if bound is not None and bound <= 1.0:
+            self.bootstrap(ctxt)
+        else:
+            self.bootstrap_extended(ctxt)
+
+    def ensure_level(
+        self,
+        ctxt: Ciphertext,
+        level: int,
+        bound=None,
+    ):
+
+        # Bootstrap in place if ctxt.level() < level; bound is the public
+        # bound of |ctxt| (regular bootstrap if <= 1, extended otherwise).
+        if ctxt.level() < level:
+            self.bootstrap_bounded(ctxt, bound)
+
+        return ctxt
 
     def level_down(self, ctxt, target_level):
 
@@ -407,14 +438,14 @@ class HEengine:
 
         return ret
         
-    def _ensure_cheb_level(self, ctxt: Ciphertext, degree: int):
+    def ensure_cheb_level(self, ctxt: Ciphertext, degree: int):
 
         required_levels = math.ceil(math.log2(degree)) + 3
 
         if ctxt.level() < required_levels:
             self.bootstrap(ctxt)
 
-    def _make_cheb_coeffs(
+    def make_cheb_coeffs(
         self,
         coeffs,
     ) -> hn.math.approx.ChebyshevCoefficients:
