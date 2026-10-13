@@ -149,6 +149,9 @@ class HEengine:
         if not isinstance(level, int) or level < 0:
             raise ValueError("level must be a non-negative integer")
 
+        if self.is_gpu():
+            msg.to(self.dt)
+
         ret = Ciphertext(len(msg), self.context)
 
         for i in range(len(msg)):
@@ -288,16 +291,19 @@ class HEengine:
             return self._mult_integer(oprd1, int(oprd2))
 
         if isinstance(oprd2, (float, np.floating)):
-            ret = Ciphertext(len(oprd1), self.context)
+            ret = oprd1
 
             # HEaaN encodes a real constant with limited absolute precision:
             # constants below ~1e-8 become 0 and the relative error grows as
             # the constant shrinks. Small constants are therefore applied as
             # a product of factors >= MIN_CONST (one level per factor).
             for factor in self._const_factors(float(oprd2)):
+                out = Ciphertext(len(oprd1), self.context)
 
                 for i in range(len(oprd1)):
-                    self.evt.mult(oprd1[i], factor, ret[i])
+                    self.evt.mult(ret[i], factor, out[i])
+
+                ret = out
 
             return ret
 

@@ -1,35 +1,21 @@
 """Helpers shared by the HE experiments."""
 
 import csv
-import json
+import os
 import time
-from pathlib import Path
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-HEDAP_TABLE = PROJECT_ROOT / "experiments" / "invsqrt" / "results" / "hedap_optimal.json"
-HEAAN_SETTING = "/heaan_setting/"
+# HEaaN device ("cpu" or "gpu") and key directory, overridable per server.
+HEAAN_DEVICE = os.environ.get("PPTEST_DEVICE", "cpu")
+HEAAN_SETTING = os.environ.get("PPTEST_HEAAN_SETTING", "/heaan_setting/")
 
 
 def make_engine():
 
     from engine.HEengine import HEengine
 
-    return HEengine(device_type="cpu", setting_root=HEAAN_SETTING)
-
-
-def invsqrt_config():
-
-    # HE-DAP accuracy-oriented choice (degree, iterations, Pre-BTS) per input
-    # level for the inverse square root domain V / V_max in [V_BAR_MIN, 1].
-    levels = json.loads(HEDAP_TABLE.read_text())["welch"]["levels"]
-
-    return {"select": {
-        int(level): (entry["accuracy"]["degree"].bit_length(), entry["accuracy"]["iteration"],
-                     bool(entry["accuracy"]["pre_bts"]))
-        for level, entry in levels.items()
-    }}
+    return HEengine(device_type=HEAAN_DEVICE, setting_root=HEAAN_SETTING)
 
 
 def first(engine, ctxt):

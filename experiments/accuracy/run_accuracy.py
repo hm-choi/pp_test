@@ -7,16 +7,16 @@ ciphertexts are decrypted afterwards (for the measurement only) and compared
 with the plaintext (SciPy) values.
 
 Tests:
-- welch : s = T^2 - c^2 with the public bound max(R^2 / (V_BAR_MIN V_max),
-          c_max^2); reports T^2, 1/df, critical value, score, sign, step and
+- welch : s = T^2 - c^2 with the public bound max(R^2 / V_min, c_max^2),
+          V_min the lower end of the invSqrt domain; reports T^2, 1/df, critical value, score, sign, step and
           the p-value from the decrypted T^2 and df;
 - f     : s = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2) with the public bound
           m_L m_U; reports score, sign and step;
 - z     : s = Z^2 - z^2 with the public bound max(R^2 / V_public, z^2)
           (sample variances used as the public variances).
 
-invSqrt (welch): HE-DAP selection per input level for V / V_max in
-[V_BAR_MIN, 1] (experiments/invsqrt/results/hedap_optimal.json).
+invSqrt (welch): V in [_INV_SQRT_MIN, _INV_SQRT_MAX] (coeffs/invSqrt_coeffs.py)
+with the default degree and Newton iterations of HEHypothesisTesting.
 
 Run (inside the HEaaN container, cwd = project root):
     python3 experiments/accuracy/run_accuracy.py
@@ -36,11 +36,11 @@ sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "experiments"))
 
 from common.cases import load_cases
-from common.he_utils import completed, first, invsqrt_config, make_engine, open_append
+from common.he_utils import completed, first, make_engine, open_append
 from common.plain import f_plain, welch_plain, z_plain
 
 
-ALPHAS = [0.001, 0.01, 0.025, 0.05, 0.1]
+ALPHAS = [0.01, 0.025, 0.05, 0.1]
 CRITICAL_LOG_DEGREE = 4  # degree 15
 REPS = 2
 TESTS = ["welch", "f", "z"]
@@ -231,9 +231,6 @@ def main():
             x1, x2 = case["x1"], case["x2"]
             s1, s2 = np.var(x1, ddof=1), np.var(x2, ddof=1)
 
-            # invSqrt input domain (plaintext check before encryption).
-            HEHypothesisTesting.check_inv_sqrt_domain(x1, x2, case["R"])
-
             plain = {
                 "welch": {a: welch_plain(x1, x2, a) for a in ALPHAS},
                 "f": {a: f_plain(x1, x2, a) for a in ALPHAS},
@@ -241,7 +238,7 @@ def main():
             }
 
             for test in args.tests.split(","):
-                ht = HEHypothesisTesting(engine, invsqrt_config() if test == "welch" else None)
+                ht = HEHypothesisTesting(engine)
 
                 for rep in range(args.reps):
                     if (case_name, test, str(rep)) in done:

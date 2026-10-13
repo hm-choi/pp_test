@@ -2,7 +2,6 @@ import math
 
 import numpy as np
 import heaan as hn
-from numpy.polynomial import Chebyshev
 
 from engine.HEengine import HEengine
 from engine.HEdata import Ciphertext
@@ -24,10 +23,6 @@ class HEApprox:
 
         self.engine = engine
         self._bootstrap_count = 0
-
-        # Runtime-generated inverse square root coefficients,
-        # keyed by (domain, log_degree).
-        self._coeff_cache = {}
 
     def bootstrap_count(
         self,
@@ -180,7 +175,7 @@ class HEApprox:
 
             ret = self.engine.evaluate_chebyshev(
                 ret,
-                self.engine._make_cheb_coeffs(coeffs),
+                self.engine.make_cheb_coeffs(coeffs),
             )
 
         return ret

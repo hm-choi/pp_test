@@ -22,7 +22,7 @@ sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "experiments"))
 
 from common.cases import load_cases
-from common.he_utils import completed, first, invsqrt_config, make_engine, open_append, timed
+from common.he_utils import completed, first, make_engine, open_append, timed
 from common.plain import f_plain, welch_plain, z_plain
 
 
@@ -106,7 +106,6 @@ def main():
     for case_name, case in cases.items():
         x1, x2 = case["x1"], case["x2"]
         s1, s2 = np.var(x1, ddof=1), np.var(x2, ddof=1)
-        HEHypothesisTesting.check_inv_sqrt_domain(x1, x2, case["R"])
 
         plain = {
             "welch": {a: welch_plain(x1, x2, a) for a in ALPHAS},
@@ -115,7 +114,7 @@ def main():
         }
 
         for test in args.tests.split(","):
-            ht = HEHypothesisTesting(engine, invsqrt_config() if test == "welch" else None)
+            ht = HEHypothesisTesting(engine)
 
             for rep in range(args.reps):
                 if (case_name, test, str(rep)) in done:

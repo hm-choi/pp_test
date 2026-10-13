@@ -195,44 +195,33 @@ class HEHypothesisTesting:
         if not np.isfinite(alpha) or not 0.0 < alpha < 1.0:
             raise ValueError("alpha must be a finite value in (0, 1)")
 
-        if degree not in table:
+        if alpha not in table:
             supported = ", ".join(str(key) for key in sorted(table))
-            raise ValueError(
-                f"Unsupported critical-value degree={degree}. Supported: {supported}"
-            )
-
-        if alpha not in table[degree]:
-            supported = ", ".join(
-                str(key) for key in sorted(table[degree])
-            )
             raise ValueError(
                 f"Unsupported alpha={alpha}. Supported: {supported}"
             )
 
+        if degree not in table[alpha]:
+            supported = ", ".join(
+                str(key) for key in sorted(table[alpha])
+            )
+            raise ValueError(
+                f"Unsupported critical-value degree={degree}. Supported: {supported}"
+            )
+
         coeffs_arr = np.asarray(
-            table[degree][alpha],
+            table[alpha][degree],
             dtype=np.float64,
         )
 
         if len(coeffs_arr) < 2 or not np.all(np.isfinite(coeffs_arr)):
             raise ValueError("Critical-value coefficients must be finite")
 
-        # InvDF = 1 / df with df >= 1, so InvDF lies in [0, 1].
-        u_min = _T_CRITICAL_U_MIN
-        u_max = _T_CRITICAL_U_MAX
-
-        # Map InvDF from [u_min, u_max] to the Chebyshev domain [-1, 1]:
-        #
-        # z = 2 * InvDF / (u_max - u_min)
-        #     - (u_max + u_min) / (u_max - u_min).
-        z = self.engine.mult(
-            inv_df,
-            2.0 / (u_max - u_min),
-        )
-        z = self.engine.sub(
-            z,
-            (u_max + u_min) / (u_max - u_min),
-        )
+        # InvDF = 1 / df with df >= 1 lies in [0, 1], the domain of the
+        # stored coefficients, so the Chebyshev input is z = 2 * InvDF - 1,
+        # computed as InvDF + InvDF - 1 (additions consume no level).
+        z = self.engine.add(inv_df, inv_df)
+        z = self.engine.sub(z, 1.0)
 
         # The Chebyshev evaluation consumes log_degree levels.
         if z.level() < log_degree + min_output_level:
@@ -240,7 +229,7 @@ class HEHypothesisTesting:
         else:
             self.approx._ensure_cheb_level(z, degree)
 
-        coeffs = self.engine._make_cheb_coeffs(coeffs_arr)
+        coeffs = self.engine.make_cheb_coeffs(coeffs_arr)
 
         return self.engine.evaluate_chebyshev(z, coeffs)
 
@@ -252,7 +241,7 @@ class HEHypothesisTesting:
     ):
 
         # Plaintext evaluation of the critical-value polynomial at u = 1 / df.
-        coeffs = _T_CRITICAL_COEFFS[2 ** log_degree - 1][alpha]
+        coeffs = _T_CRITICAL_COEFFS[alpha][2 ** log_degree - 1]
         z = 2.0 * (u - _T_CRITICAL_U_MIN) / (_T_CRITICAL_U_MAX - _T_CRITICAL_U_MIN) - 1.0
 
         return float(np.polynomial.chebyshev.chebval(z, coeffs))
@@ -279,21 +268,19 @@ class HEHypothesisTesting:
         self,
         v: Ciphertext,
         v_max: float,
-        min_level: int,
     ):
 
-        # Approximate 1 / sqrt(V_bar) for V_bar in [V_BAR_MIN, 1]. The output
-        # (|y| <= 1 / sqrt(V_BAR_MIN)) is refreshed with the extended
-        # bootstrap when its level is below `min_level`.
+        # Approximate 1 / sqrt(V) for V in [_INV_SQRT_MIN, _INV_SQRT_MAX].
+        # V (|V| <= v_max) is bootstrapped before the input mapping.
         lo, hi = _INV_SQRT_MIN, _INV_SQRT_MAX
 
         self._bootstrap_bounded(v, v_max)
 
-        # First input for Newton iteration: V_bar / 2.
+        # First input for Newton iteration: V / 2.
         x_half = self.engine.mult(v, 0.5)
 
         # Second input for the Chebyshev approximation:
-        # map V_bar from [lo, hi] to [-1, 1].
+        # map V from [lo, hi] to [-1, 1].
         x_cheb = self.engine.sub(v, lo)
         x_cheb = self.engine.mult(x_cheb, 2.0 / (hi - lo))
         x_cheb = self.engine.sub(x_cheb, 1)
@@ -307,8 +294,6 @@ class HEHypothesisTesting:
             log_degree=log_deg,
             iteration=iter
         )
-
-        self.approx.ensure_level(y, min_level, 1.0 / np.sqrt(lo))
 
         return y
 
@@ -364,16 +349,17 @@ class HEHypothesisTesting:
         a1 = self.engine.mult(var1, 1.0 / n1)
         a2 = self.engine.mult(var2, 1.0 / n2)
 
-        # V = A1 + A2, normalized by the public bound: V_bar = V / V_max.
+        # V = A1 + A2.
         v = self.engine.add(a1, a2)
 
-        # Y = 1 / sqrt(V_bar). Level 9 is needed for 1/V_bar, 1/V_bar^2,
-        # 1/df and the critical-value mapping (bootstrapped at level >= 3
-        # before the Chebyshev evaluation).
-        y = self._inv_sqrt(v, v_max, 9)
-        self._trace(trace, "inv_sqrt_v_bar", y)
+        # Y = 1 / sqrt(V). Y (|Y| <= 1 / sqrt(_INV_SQRT_MIN)) needs level 9
+        # for T, 1/V, 1/V^2, 1/df and the critical-value mapping
+        # (bootstrapped at level >= 3 before the Chebyshev evaluation).
+        y = self._inv_sqrt(v, v_max)
+        self._ensure_level(y, 9, 1.0 / np.sqrt(_INV_SQRT_MIN))
+        self._trace(trace, "inv_sqrt_v", y)
 
-        # T = (mean1 - mean2) / sqrt(V_max) * Y.
+        # T = (mean1 - mean2) * Y.
         u = self.engine.sub(mean1, mean2)
         t = self.engine.mult(u, y)
         self._trace(trace, "t", t)
@@ -390,8 +376,7 @@ class HEHypothesisTesting:
         d_bar = self.engine.add(d1, d2)
         self._ensure_level(d_bar, 7, 1.0)
 
-        # 1 / V_bar = Y^2, 1 / V_bar^2 and
-        # 1 / df = D / V^2 = D_bar / V_bar^2 * D_max / V_max^2.
+        # 1 / V = Y^2, 1 / V^2 and 1 / df = D / V^2 = D_bar / V^2 * D_max.
         inv_v = self.engine.mult(y, y)
         inv_v_sq = self.engine.mult(inv_v, inv_v)
 
@@ -421,7 +406,7 @@ class HEHypothesisTesting:
     ):
 
         # Public bound of |s| with s = T^2 - c^2:
-        # T^2 = (mean1 - mean2)^2 / V <= R^2 / (V_BAR_MIN * V_max) and
+        # T^2 = (mean1 - mean2)^2 / V <= R^2 / _INV_SQRT_MIN and
         # c^2 <= c_max^2. The Welch-Satterthwaite df is at least
         # min(n1, n2) - 1, so c_max^2 is the critical-value polynomial at
         # u = 1 / (min(n1, n2) - 1) (the polynomials of degree >= 15 are

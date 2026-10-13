@@ -27,9 +27,10 @@ same method in plaintext:
 - invdf : HEHypothesisTesting._critical_value_from_inv_df (stored coefficients,
           for every condition) (results/he_raw.csv);
 - invdf_range : 1/df polynomial refitted on the case range (case conditions);
-- df    : df = 1/u in HE (invSqrt of u * df_lo, squared), then the df
-          polynomial fitted on the condition range (results/he_raw.csv,
-          stage time of the division in nu_time).
+- df    : df = 1/u in HE (invSqrt of u * 0.01 df_hi, which lies in the
+          invSqrt domain, squared), then the df polynomial fitted on the
+          condition range (results/he_raw.csv, stage time of the division in
+          nu_time).
 
 Run (inside the HEaaN container, cwd = project root):
     python3 experiments/critical_boundary/run_critical_boundary.py --part plain
@@ -51,24 +52,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "experiments"))
 
+from coeffs.invSqrt_coeffs import _INV_SQRT_MIN
 from coeffs.t_critical_coeffs import (
-    _T_CRITICAL_SQ_COEFFS,
+    _T_CRITICAL_COEFFS,
     _T_CRITICAL_U_MIN,
     _T_CRITICAL_U_MAX,
 )
 
 
-ALPHAS = [0.001, 0.01, 0.025, 0.05, 0.1]
+ALPHAS = [0.01, 0.025, 0.05, 0.1]
 LOG_DEGREES = range(3, 8)  # degree = 2^3-1, ..., 2^7-1
 DF_MIN, DF_MAX = 1.0, 10000.0
 DF_BANDS = [(1.0, 2.0), (2.0, 10.0), (10.0, 30.0), (30.0, 10000.0)]
 REPS = 2
 EVAL_POINTS = 65536  # two ciphertexts of 32768 slots
-
-# HE part.
-# (log_degree, Newton iterations) of invSqrt in the df-input baseline
-# (domain [df_lo / df_hi, 1]).
-DF_INPUT_INVSQRT = {"global": (6, 4), "case": (5, 1)}
 
 RESULT_DIR = Path(__file__).resolve().parent / "results"
 
@@ -117,7 +114,7 @@ def run_plain(out_dir):
                 # 1/df input.
                 if range_name == "global":
                     z = 2.0 * (u - _T_CRITICAL_U_MIN) / (_T_CRITICAL_U_MAX - _T_CRITICAL_U_MIN) - 1.0
-                    y_inv = np.polynomial.chebyshev.chebval(z, _T_CRITICAL_SQ_COEFFS[degree][alpha])
+                    y_inv = np.polynomial.chebyshev.chebval(z, _T_CRITICAL_COEFFS[alpha][degree])
                 else:
                     p = Chebyshev.interpolate(lambda v: exact_sq(alpha, 1.0 / v), degree, domain=[1.0 / hi, 1.0 / lo])
                     y_inv = p(u)
@@ -206,7 +203,7 @@ def run_he_poly(engine, ht, conditions, reps, path, alphas):
                     out = ht._critical_value_from_inv_df(ctxt, alpha, ld)
                     elapsed = time.perf_counter() - start
                     add("invdf", degree, alpha, rep, dec(out),
-                        np.polynomial.chebyshev.chebval(z_inv, _T_CRITICAL_SQ_COEFFS[degree][alpha]),
+                        np.polynomial.chebyshev.chebval(z_inv, _T_CRITICAL_COEFFS[alpha][degree]),
                         time=elapsed, input_level=12, output_level=out.level(),
                         bootstrap_count=ht.bootstrap_count())
 
@@ -223,7 +220,7 @@ def run_he_poly(engine, ht, conditions, reps, path, alphas):
                         zr = engine.mult(ctxt, 2.0 / (1.0 / lo - 1.0 / hi))
                         zr = engine.sub(zr, (1.0 / lo + 1.0 / hi) / (1.0 / lo - 1.0 / hi))
                         ht.approx._ensure_cheb_level(zr, degree)
-                        out = engine.evaluate_chebyshev(zr, engine._make_cheb_coeffs(p.coef))
+                        out = engine.evaluate_chebyshev(zr, engine.make_cheb_coeffs(p.coef))
                         elapsed = time.perf_counter() - start
                         add("invdf_range", degree, alpha, rep, dec(out), p(u),
                             time=elapsed, input_level=12, output_level=out.level(),
@@ -233,8 +230,7 @@ def run_he_poly(engine, ht, conditions, reps, path, alphas):
             ctxt = engine.enc(Message(u, engine.log_slots), level=12)
             ht.reset_bootstrap_count()
             start = time.perf_counter()
-            z = he_df_input(engine, ht.approx, ctxt, lo, hi,
-                            *DF_INPUT_INVSQRT["global" if name == "global" else "case"])
+            z = he_df_input(engine, ht, ctxt, lo, hi)
             nu_time = time.perf_counter() - start
             nu_bts = ht.bootstrap_count()
             nu = (dec(z) * (hi - lo) + (hi + lo)) / 2.0
@@ -249,7 +245,7 @@ def run_he_poly(engine, ht, conditions, reps, path, alphas):
                     ht.reset_bootstrap_count()
                     start = time.perf_counter()
                     ht.approx._ensure_cheb_level(zc, degree)
-                    out = engine.evaluate_chebyshev(zc, engine._make_cheb_coeffs(p.coef))
+                    out = engine.evaluate_chebyshev(zc, engine.make_cheb_coeffs(p.coef))
                     elapsed = time.perf_counter() - start
                     add("df", degree, alpha, rep, dec(out), p(df),
                         time=nu_time + elapsed, nu_time=nu_time, input_level=12, output_level=out.level(),
@@ -269,20 +265,20 @@ def run_he_poly(engine, ht, conditions, reps, path, alphas):
     write_csv(path, fields, rows)
 
 
-def he_df_input(engine, approx, ctxt_u, lo, hi, log_degree, iteration):
+def he_df_input(engine, ht, ctxt_u, lo, hi):
 
-    # df = 1/u for df in [lo, hi]: w = lo * u lies in [lo / hi, 1], y = 1/sqrt(w)
-    # (invSqrt, |y| <= sqrt(hi / lo)) and df = lo * y^2. Returns df mapped to
-    # [-1, 1]: z = 2 df / (hi - lo) - (hi + lo) / (hi - lo) = (k y)^2 - c.
-    w_lo = lo / hi
-    x_half = engine.mult(ctxt_u, lo / 2.0)
-    x_cheb = engine.mult(ctxt_u, 2.0 * lo / (1.0 - w_lo))
-    x_cheb = engine.sub(x_cheb, (1.0 + w_lo) / (1.0 - w_lo))
+    # df = 1/u for df in [lo, hi]: w = c u with c = _INV_SQRT_MIN * hi lies in
+    # [_INV_SQRT_MIN, _INV_SQRT_MIN * hi / lo], inside the invSqrt domain,
+    # y = 1/sqrt(w) (|y| <= 1 / sqrt(_INV_SQRT_MIN)) and df = c y^2. Returns
+    # df mapped to [-1, 1]: z = 2 df / (hi - lo) - (hi + lo) / (hi - lo)
+    # = (k y)^2 - (hi + lo) / (hi - lo) with k = sqrt(2 c / (hi - lo)).
+    c = _INV_SQRT_MIN * hi
+    w = engine.mult(ctxt_u, c)
 
-    y = approx.invSqrt(x_half, x_cheb, (w_lo, 1.0), log_degree, iteration)
-    approx.ensure_level(y, 5, math.sqrt(hi / lo))
+    y = ht._inv_sqrt(w, c / lo)
+    ht._ensure_level(y, 5, 1.0 / math.sqrt(_INV_SQRT_MIN))
 
-    yk = engine.mult(y, math.sqrt(2.0 * lo / (hi - lo)))
+    yk = engine.mult(y, math.sqrt(2.0 * c / (hi - lo)))
 
     return engine.sub(engine.mult(yk, yk), (hi + lo) / (hi - lo))
 
