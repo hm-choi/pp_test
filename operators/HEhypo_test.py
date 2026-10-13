@@ -20,8 +20,8 @@ from coeffs.t_critical_coeffs import (
 
 # Inverse square root configuration.
 DEFAULT_INVSQRT_PARAMS = {
-    "log_degree": 4,
-    "iteration": 5,
+    "log_degree": 6,
+    "iteration": 7,
 }
 
 
@@ -294,11 +294,9 @@ class HEHypothesisTesting:
 
         # Second input for the Chebyshev approximation:
         # map V_bar from [lo, hi] to [-1, 1].
-        if v_max < _INV_SQRT_MAX:
-            v_max = 1.0
         x_cheb = self.engine.sub(v, lo)
-        x_cheb = self.engine.mult(x_cheb, 2.0 / (hi - lo) / v_max)
-        x_cheb = self.engine.sub(x_cheb, 1 / v_max)
+        x_cheb = self.engine.mult(x_cheb, 2.0 / (hi - lo))
+        x_cheb = self.engine.sub(x_cheb, 1)
 
         cfg = self.invsqrt_params
         log_deg, iter = cfg["log_degree"], cfg["iteration"]
@@ -307,8 +305,7 @@ class HEHypothesisTesting:
             x_half,
             x_cheb,
             log_degree=log_deg,
-            iteration=iter,
-            scale=1/np.sqrt(v_max)
+            iteration=iter
         )
 
         self.approx.ensure_level(y, min_level, 1.0 / np.sqrt(lo))
