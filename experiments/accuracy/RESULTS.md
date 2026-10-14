@@ -3,51 +3,31 @@
 Script `run_accuracy.py`; raw results `results/accuracy_raw.csv` (one row per case, test, repetition and alpha),
 summary `results/accuracy_summary.csv`.
 
-HEaaN FGb (CPU), log_slots = 15. Two-sided alpha in {0.001, 0.01, 0.025, 0.05, 0.1}, 10 repetitions. For every repetition
-the encrypted statistics are computed once and the decision is evaluated separately for every alpha; copies of the
-intermediate ciphertexts are decrypted for the measurement. Each comparison has the public input interval [L, U]
-(minimum and maximum of the two groups) and R = U - L.
+HEaaN FGb (GPU, NVIDIA Tesla V100), log_slots = 15. invSqrt domain V in [0.01, 1000] (degree-63 Chebyshev + 7 Newton iterations); ApproxTCrit degree 15. Two-sided alpha in {0.01, 0.025, 0.05, 0.1}, 10 repetitions. For every repetition the encrypted
+statistics are computed once and the decision is evaluated separately for every alpha. Relative errors are
+against the plaintext (SciPy) values; the critical value is compared as c^2.
 
-| case | n1 / n2 | L | U | R | Welch df | V / V_max |
-|---|---|---|---|---|---|---|
-| insurance_charges_smoker | 274 / 1064 | 1.122 | 63.77 | 62.65 | 311.9 | 0.115 |
-| adult_edu_income | 1024 / 1024 | 1 | 16 | 15 | 2037.8 | 0.111 |
-| adult_age_gender | 1024 / 1024 | 17 | 90 | 73 | 2035.0 | 0.145 |
-| heart_chol_disease | 139 / 164 | 126 | 564 | 438 | 298.6 | 0.055 |
-| diabetes_labs_readmitted | 11357 / 54864 | 1 | 132 | 131 | 16691.2 | 0.087 |
-| credit_limit_default | 6636 / 23364 | 1 | 100 | 99 | 11982.1 | 0.058 |
-| bank_age_subscribed | 5289 / 39922 | 18 | 95 | 77 | 6109.2 | 0.117 |
+| case | n1 / n2 | R | V |
+|---|---|---|---|
+| insurance_charges_smoker | 274 / 1064 | 62.65 | 0.52 |
+| adult_edu_income | 1024 / 1024 | 15 | 0.0122 |
+| adult_age_gender | 1024 / 1024 | 73 | 0.377 |
+| diabetes_labs_readmitted | 11357 / 54864 | 131 | 0.0399 |
+| credit_limit_default | 6636 / 23364 | 99 | 0.0275 |
+| bank_age_subscribed | 5289 / 39922 | 77 | 0.037 |
 
-Decision scores and public bounds B (the step function is applied to s / B):
-- Welch: s = T^2 - c^2, B = max(R^2 / (V_BAR_MIN V_max), c_max^2) with V_BAR_MIN = 0.01; c^2 from the
-  degree-15 polynomial of u = 1/df on [0, 1] (ApproxTCrit), c_max^2 at u = 1/(min(n1, n2) - 1); invSqrt: HE-DAP
-  selection for V / V_max in [V_BAR_MIN, 1] (`../invsqrt/RESULTS.md`).
-- F: s = (s1^2 - F_L s2^2)(s1^2 - F_U s2^2), each factor divided by m_j = max(s1max^2, F_j s2max^2),
-  s_imax^2 = n_i R^2 / (4 (n_i - 1)).
-- Z: s = Z^2 - z^2, B = max(R^2 / V_public, z^2); the sample variances are used as the public variances.
+## Relative errors, mean (standard deviation), 6 comparisons
 
-## Decision agreement
-
-A combination (case, test, alpha) matches when, in every repetition, the step output (> 0.5), the sign of the decrypted
-score and (Welch, Z) the decision from the HE-derived p-value all equal the SciPy decision.
-
-| test | combinations | match | reject | fail to reject |
+| test | statistic | 1/df | critical c^2 | score |
 |---|---|---|---|---|
-| Welch | 35 | 35 | 30 | 5 |
-| F | 35 | 35 | 25 | 10 |
-| Z | 35 | 35 | 30 | 5 |
+| Welch | 1.36e-07 (2.93e-07) | 2.13e-06 (2.98e-06) | 1.19e-07 (4.35e-08) | 3.91e-06 (6.20e-06) |
+| F | -- | -- | public | 2.65e-06 (4.97e-06) |
+| Z | 6.50e-09 (1.19e-08) | -- | public | 1.71e-08 (3.22e-08) |
 
-Fail to reject: Welch heart_chol_disease (alpha 0.001, 0.01, 0.025, 0.05, 0.1); F adult_age_gender (alpha 0.001, 0.01); F adult_edu_income (alpha 0.001, 0.01, 0.025); F heart_chol_disease (alpha 0.001, 0.01, 0.025, 0.05, 0.1); Z heart_chol_disease (alpha 0.001, 0.01, 0.025, 0.05, 0.1).
+## Decision agreement (step output > 0.5 vs plaintext)
 
-## Intermediate-value accuracy
-
-Mean (standard deviation) and maximum over cases, alphas and repetitions. Statistic, 1/df and critical value c^2:
-relative error; score: absolute error divided by the public bound, |s - s_HE| / B; p-value: absolute error.
-
-| test | statistic | 1/df | critical value c^2 | score / B | p-value | plaintext \|s\| / B (min - max) |
-|---|---|---|---|---|---|---|
-| Welch | 1.87e-07 (2.29e-07), max 7.80e-07 | 1.48e-06 (1.62e-06), max 7.38e-06 | 1.31e-04 (2.90e-04), max 9.19e-04 | 6.17e-09 (1.81e-08), max 9.85e-08 | 4.12e-10 (1.46e-09), max 8.41e-09 | 2.82e-06 - 1.23e-02 |
-| F | -- | -- | public | 1.33e-10 (1.04e-10), max 5.58e-10 | -- | 3.79e-06 - 8.31e-03 |
-| Z | 6.31e-09 (1.10e-08), max 3.53e-08 | -- | public | 4.03e-11 (7.22e-11), max 2.97e-10 | 1.89e-10 (5.81e-10), max 3.15e-09 | 4.31e-05 - 1.42e-01 |
-
-The F test computes no F statistic or p-value; the F and Z critical values are public.
+| test | runs | match | reject / fail configurations |
+|---|---|---|---|
+| welch | 240 | 240 | 24 / 0 |
+| f | 240 | 240 | 21 / 3 |
+| z | 240 | 240 | 24 / 0 |

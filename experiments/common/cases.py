@@ -7,7 +7,6 @@ Adult groups use the first 1,024 records of each group; the other datasets
 use every record of the two groups.
 
 Sources (UCI Machine Learning Repository, CC BY 4.0), files in datasets/:
-- Heart Disease, processed Cleveland data (heart_disease_processed_cleveland.data);
 - Diabetes 130-US Hospitals for Years 1999-2008 (diabetes_130_us_hospitals.csv);
 - Default of Credit Card Clients (default_of_credit_card_clients.csv, converted
   from the original .xls without changes);
@@ -25,11 +24,6 @@ DATASET_DIR = PROJECT_ROOT / "datasets"
 
 ADULT_SAMPLES_PER_GROUP = 1_024
 
-HEART_COLUMNS = [
-    "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
-    "thalach", "exang", "oldpeak", "slope", "ca", "thal", "num",
-]
-
 
 def _select(df, group_column, group_value, value_column, scale=1.0, limit=None):
 
@@ -41,11 +35,6 @@ def load_cases():
 
     insurance = pd.read_csv(DATASET_DIR / "insurance.csv")
     adult = pd.read_csv(DATASET_DIR / "adult_dataset.csv")
-    heart = pd.read_csv(
-        DATASET_DIR / "heart_disease_processed_cleveland.data",
-        header=None, names=HEART_COLUMNS, na_values="?",
-    )
-    heart["disease"] = np.where(heart["num"] > 0, "yes", "no")
     diabetes = pd.read_csv(
         DATASET_DIR / "diabetes_130_us_hospitals.csv",
         usecols=["readmitted", "num_lab_procedures"],
@@ -69,11 +58,6 @@ def load_cases():
             "Adult age: Female vs Male",
             _select(adult, "gender", "Female", "age", limit=n),
             _select(adult, "gender", "Male", "age", limit=n),
-        ),
-        "heart_chol_disease": (
-            "Heart Disease (Cleveland) cholesterol: disease vs no disease",
-            _select(heart, "disease", "yes", "chol"),
-            _select(heart, "disease", "no", "chol"),
         ),
         "diabetes_labs_readmitted": (
             "Diabetes 130 num_lab_procedures: readmitted <30 days vs not readmitted",

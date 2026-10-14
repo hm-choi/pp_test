@@ -6,7 +6,7 @@ reference SciPy `t.ppf`, error = relative error (MaxRE, MRE).
 Plaintext part (--part plain). Every method is evaluated under two df-range
 conditions, each with its own evaluation grid of EVAL_POINTS df (log-spaced
 over the range, plus the Welch df of the cases for a case range):
-- global : df in [1, 10^4];
+- global : df in [3, 10^4];
 - case   : df in [min(n1, n2) - 1, n1 + n2 - 2] for each dataset case (the
            Welch-Satterthwaite df always lies in this public range).
 
@@ -17,7 +17,7 @@ the same range they are evaluated on):
 - df    : input df.
 
 For the global condition, MaxRE is also reported per df band
-(1-2, 2-10, 10-30, 30-10^4).
+(3-10, 10-30, 30-100, 100-10^4).
 
 HE part (--part he). The same df points (two ciphertexts of 32768 slots) and
 df-range conditions (global and one per distinct case range), encrypted
@@ -62,8 +62,8 @@ from coeffs.t_critical_coeffs import (
 
 ALPHAS = [0.01, 0.025, 0.05, 0.1]
 LOG_DEGREES = range(3, 8)  # degree = 2^3-1, ..., 2^7-1
-DF_MIN, DF_MAX = 1.0, 10000.0
-DF_BANDS = [(1.0, 2.0), (2.0, 10.0), (10.0, 30.0), (30.0, 10000.0)]
+DF_MIN, DF_MAX = 3.0, 10000.0
+DF_BANDS = [(3.0, 10.0), (10.0, 30.0), (30.0, 100.0), (100.0, 10000.0)]
 REPS = 2
 EVAL_POINTS = 65536  # two ciphertexts of 32768 slots
 

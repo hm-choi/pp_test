@@ -1,23 +1,16 @@
-# Boundary-sensitive decisions across degrees of freedom
+# Boundary-sensitive decisions
 
 Script `run_boundary_decision.py`; raw results `results/boundary_decision_raw.csv`.
 
-Synthetic groups whose Welch statistic is (t_crit + margin) SE next to the two-sided critical value, margins
-+-0.001, +-0.002, +-0.005, +-0.01, 10 repetitions; degree-15 critical-value polynomial and step function.
-df >= 2: two groups of n = df/2 + 1 samples, 10 + 5 linspace(-1, 1, n) +- gap/2 (equal variances, df = 2n - 2);
-df = 1: n1 = n2 = 2 with a constant second group (df = n1 - 1 = 1). [L, U] = minimum and maximum of the two groups.
+HEaaN FGb (GPU, NVIDIA Tesla V100), log_slots = 15. invSqrt domain V in [0.01, 1000] (degree-63 Chebyshev + 7 Newton iterations); ApproxTCrit degree 15. Synthetic groups of n = ceil(df / 2) + 1 samples whose Welch t statistic is t_crit + margin,
+margins +-0.001, +-0.002, +-0.005, +-0.01, 10 repetitions (80 trials per cell). The variance ratio of the groups
+sets the Welch-Satterthwaite df exactly; both groups are scaled so that V >= 0.02.
 
-Each cell: matching decisions / trials (8 margins x repetitions). * = inputs outside the invSqrt domain
-(V / V_max < V_BAR_MIN = 0.01).
+| alpha | df 3 | df 4 | df 5 | df 6 | df 7 | df 8 | df 9 | df 10 | df 50 | df 100 | df 2000 | df 10000 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0.01 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
+| 0.025 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
+| 0.05 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
+| 0.1 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
 
-| alpha | df 1 | df 2 | df 10 | df 50 | df 100 | df 2000 | df 10000 |
-|---|---|---|---|---|---|---|---|
-| 0.001 | 42/80* | 40/80* | 80/80 | 80/80 | 70/80 | 70/80 | 70/80 |
-| 0.01 | 40/80* | 78/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
-| 0.025 | 40/80* | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 79/80 |
-| 0.05 | 78/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 79/80 |
-| 0.1 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 | 80/80 |
-
-Mismatches inside the domain (df, alpha, margin: count): (1, 0.05, 0.001: 2), (2, 0.01, -0.001: 1), (2, 0.01, 0.001: 1), (100, 0.001, 0.001: 10), (2000, 0.001, -0.001: 10), (10000, 0.001, -0.001: 10), (10000, 0.025, 0.002: 1), (10000, 0.05, -0.001: 1).
-
-Smallest plaintext |s| / B per df (over alphas and margins): df 1: 3.14e-06, df 2: 1.56e-07, df 10: 3.62e-06, df 50: 6.70e-07, df 100: 3.32e-07, df 2000: 1.65e-08, df 10000: 3.29e-09.
+Total 3840/3840; in-domain inputs 3840/3840, errors 0.
