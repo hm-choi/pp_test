@@ -34,9 +34,10 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
+sys.path.append(str(PROJECT_ROOT / "experiments"))
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from engine.HEengine import HEengine
+from common.he_utils import make_engine
 from engine.HEdata import Message
 from operators.HEapprox import HEApprox
 
@@ -100,26 +101,27 @@ def build_configs(optimal, raw, domains):
 
 def run_once(engine, approx, config, x):
 
-    dom = (config["lo"], config["hi"])
     log_degree = config["degree"].bit_length()
 
     ctxt = engine.enc(Message(x, engine.log_slots), level=config["level"])
     x_dec = decrypt(engine, ctxt, len(x))
 
     # One-off plaintext work (coefficients) outside the timer.
-    approx.inv_sqrt_coeffs(log_degree, dom)
+    approx.inv_sqrt_coeffs(log_degree)
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()
 
     x_half, x_cheb = map_input(engine, ctxt, config)
+
+    if config["pre_bts"]:
+        approx._bootstrap(x_cheb)
+
     y = approx.invSqrt(
         x_half,
         x_cheb,
-        domain=dom,
         log_degree=log_degree,
         iteration=config["iteration"],
-        pre_bts=bool(config["pre_bts"]),
     )
 
     elapsed = time.perf_counter() - start
@@ -231,7 +233,7 @@ def main():
         (out_dir / "measure_configs.json").write_text(json.dumps(configs, indent=2))
         print(f"{len(configs)} configurations x {args.reps} reps", flush=True)
 
-        engine = HEengine(device_type="cpu", setting_root="/heaan_setting/")
+        engine = make_engine()
         approx = HEApprox(engine)
         done = load_done(raw_path)
 

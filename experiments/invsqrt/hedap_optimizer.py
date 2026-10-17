@@ -9,8 +9,9 @@ Chebyshev + i_max Newton iterations records the MRE and the accumulated
 runtime after each iteration. The optimal iteration per (l, d, c) and the
 optimal (d, c, i) per level are then chosen as in HE-DAP.
 
-Domain (see domains.py): x = V / V_max in [V_BAR_MIN, 1] (Welch's t-test),
-shared by every dataset comparison.
+Domain (see domains.py): V in [0.01, 1000] (Welch's t-test), shared by every
+dataset comparison. HEHypothesisTesting uses the configuration selected by
+this search (degree 63, 7 Newton iterations).
 
 Differences from the Lattigo reference code:
 - degree is 2^d - 1 (pp_test coefficients) instead of 2^d - 2;
@@ -20,15 +21,11 @@ Differences from the Lattigo reference code:
   supplementary selection with the algorithmic MaxRE is reported.
 
 HEaaN-specific choices in HEApprox.invSqrt (they shape the search space):
-- y in the Newton steps (in [1/sqrt(hi), 1/sqrt(lo)]) is refreshed with the
-  extended bootstrap (input range 2^20, min level 4) instead of Lattigo's
-  DoBootstrap(y, 4);
-- x_half is bootstrapped only when its level is <= 5, so with c = 0 a low
-  input level makes every Newton step end at level 4-5 and bootstrap y
-  (this is the trade-off the Pre-BTS indicator c explores);
-- Pre-BTS bootstraps x_cheb (in [-1, 1]) and derives x_half from it;
-- the Chebyshev output y0 is refreshed with the regular bootstrap (its
-  error for |y0| > 1 is refined by the following Newton iterations).
+- the Chebyshev coefficients are the stored table coeffs/invSqrt_coeffs.py
+  (degrees 2^4 - 1 .. 2^9 - 1 on the domain above);
+- y in the Newton steps is refreshed with the regular bootstrap when its
+  level is <= 4, and x_half is not refreshed;
+- Pre-BTS bootstraps x_cheb (in [-1, 1]) before the Chebyshev evaluation.
 
 Run (inside the HEaaN container, cwd = project root):
     python3 experiments/invsqrt/hedap_optimizer.py
@@ -49,11 +46,10 @@ sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "experiments"))
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from engine.HEengine import HEengine
 from engine.HEdata import Message
 from operators.HEapprox import HEApprox
 
-from common.he_utils import open_append
+from common.he_utils import make_engine, open_append
 from domains import get_domains
 
 
@@ -146,19 +142,21 @@ def get_opt_iter(approx, ctxt, ans, domain, log_degree, pre_bts, i_max=I_MAX):
     # Algorithm 2 (GetOptIter): one Chebyshev + i_max Newton iterations,
     # recording MRE and accumulated runtime after every iteration.
     engine = approx.engine
-    dom = (domain["lo"], domain["hi"])
-
     x_dec = decrypt(engine, ctxt, len(ans))
     ans_alg = np.maximum(x_dec, np.finfo(float).tiny) ** -0.5
 
     # One-off plaintext work (coefficients) outside the timer.
-    approx.inv_sqrt_coeffs(log_degree, dom)
+    approx.inv_sqrt_coeffs(log_degree)
     approx.reset_bootstrap_count()
 
     start = time.perf_counter()
 
     x_half, x_cheb = map_input(engine, ctxt, domain)
-    x_half, y = approx.invSqrt_init(x_half, x_cheb, dom, log_degree, pre_bts)
+
+    if pre_bts:
+        approx._bootstrap(x_cheb)
+
+    y = approx.invSqrt_init(x_cheb, log_degree, 1.0)
 
     elapsed = time.perf_counter() - start
 
@@ -325,7 +323,7 @@ def main():
     raw = load_raw(raw_path)
 
     if not args.select_only:
-        engine = HEengine(device_type="cpu", setting_root="/heaan_setting/")
+        engine = make_engine()
         approx = HEApprox(engine)
 
         file, writer = open_append(raw_path, RAW_FIELDS)

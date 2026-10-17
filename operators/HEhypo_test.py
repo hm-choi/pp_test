@@ -370,7 +370,7 @@ class HEHypothesisTesting:
 
         # D = A1^2 / (n1 - 1) + A2^2 / (n2 - 1), normalized by the public
         # bound: D_bar = D / D_max in [0, 1]. The constants 1 / (n_i - 1) and
-        # 1 / D_max are applied as one constant per term (one level).
+        # 1 / D_max are applied as one constant per term.
         d1 = self.engine.mult(self.engine.mult(a1, a1), 1.0 / ((n1 - 1) * d_max))
         d2 = self.engine.mult(self.engine.mult(a2, a2), 1.0 / ((n2 - 1) * d_max))
         d_bar = self.engine.add(d1, d2)
@@ -438,7 +438,8 @@ class HEHypothesisTesting:
 
         # c^2 keeps 5 levels: T^2 - c^2 is not bootstrappable before the
         # normalization (|T^2 - c^2| <= B), and multiplying by a small 1 / B
-        # takes up to two levels before StepHE (input level >= 3).
+        # takes up to two levels (constants below 1e-4 are applied in two
+        # steps) before StepHE (input level >= 3).
         critical_sq = self._critical_value_from_inv_df(
             stats["inv_df"],
             alpha,

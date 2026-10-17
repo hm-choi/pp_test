@@ -1,4 +1,5 @@
-# Local Codex instructions
-AGENTS.md
 **/__pycache__/
 **/*.pyc
+
+# Outputs of new runs (the results of the paper are in results/)
+experiments/*/results/
